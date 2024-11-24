@@ -1,4 +1,4 @@
-# hgit
+# Haskell Git (hgit)
 
 ## TL;DR 
 A lightweight, pure Haskell library implementing core Git functionality for local-only repositories.
