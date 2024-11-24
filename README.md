@@ -58,8 +58,21 @@ Git supports a number of commands, easily over a 100, of these, less than half a
   - hgit rm
   - hgit mv
   - hgit help
+  - It would easily follow to implement a few plumbing commands which we are certain to already have coded up for either functionality or testing purposes e.g. _git cat-file -p hashcode_
 
 ## Object Model & Workflow
+
+User calls _git init_ which creates a _.hgit_ directory in the current directory. This directory will initially contain:
+- A file titled _HEAD_, which will contain the relative file path e.g. "refs/heads/head", to the file that contains the object ID or OID for the commit object currently being pointed to by _HEAD_ e.g. the branch that the user is currently on.
+- An objects directory, which will be two levels deep, the first level will contain directories named using the first two characters of the hexadecimal string (OID) formed from the SHA-1 hash of each file that's being tracked by hgit. The second level will contain files named using the latter 38 characters (An SHA-1 hash is 160 bits, and hexadecimal characters can each represent 4 bits since they're base-16, so 160/4 = 40 characters). The second level files will contain the serialized content of all objects: trees, commits, or blobs.
+  - A commit object will contain the OID for it's root tree, the OID of the parent/s commit (no parent if root commit), the author with their name, email ID, and a timestamp of when the commit was made (which will be set by _git config user.name "name"_ and _git config user.email "email"_)
+  - A tree object will contain data on either blobs or other trees representing subdirectories. Both object types will have their associated OID and file or directory names.
+  - A blob object will simply contain serialized file content
+- A refs directory, which will contain a _heads_ directory that will contain files, one for each local branch, named using that branch's name and its content will just be the OID for that branch, meaning the commit being pointed to by that branch
+
+This directory will eventually also contain a file titled _index_ which will contain binary data on each file that is staged (it must have been staged via _git add_), with data on each file including the OID or SHA-1 hash and the path to the file from the root directory
+
+__All of our implemented commands will rely on this object model, and they will not use any additional type of file or formatting to achieve our desired functionality.__ 
 
 ## Detailed Command Definitions incl. flags, args, etc.
 
