@@ -106,6 +106,19 @@ __All of our implemented commands will rely on this object model, and they will 
     - Untracked files: files that haven't been staged, which includes new files, also ignored files if we ever implement .gitignore type functionality
 
 ## Modules and Type-Definitions in Haskell to support Object Model and General Implementation
+- CommandParser.hs to parse inputs from user, return which command was input
+- Main.hs for getting input from the user and calling functions to parse the input and call the appropriate function/s to actually implement a given command
+- Index.hs: Read/write/update Index file
+- Refs.hs: Read/write refs directory as needed 
+- Object.hs: Objects are either Blobs, Trees, or Commits. Data types for each are defined here as well as methodologies for serializing and deserializing files corresponding to each type
+- Branch.hs: Branch functionality including listing, creating, deleting, and renaming branches
+- Commit.hs: Commit functionality incl. creating a new commit, amending the previous commit
+- Tree.hs: Tree functionality including traversal
+- Hash.hs: Functionality related to hashing files, comparing hashes, etc.
+- FileIO.hs: Functionality related to reading and writing to a file
+- Head.hs for all functionality related to modifying the Head ptr
+- Config.hs for functionality tied to modifying the config file
+
 
 ## Project Testing
 
