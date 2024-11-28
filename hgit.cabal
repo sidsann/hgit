@@ -36,6 +36,7 @@ common common-stanza
     , bytestring
     , zlib
     , cryptohash-sha1
+    , diff3
   default-language:
     GHC2021
   default-extensions:
@@ -51,7 +52,6 @@ library
       Commit
       Config
       FileIO
-      GenericParser
       Hash
       Head
       Refs
