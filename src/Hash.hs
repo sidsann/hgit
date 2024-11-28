@@ -1,17 +1,18 @@
 module Hash
   ( compress,
     decompress,
-    sha1HashWithOpenSSL,
+    sha1Hash,
     byteStringToText,
   )
 where
 
 import Codec.Compression.Zlib qualified as Zlib
+import Crypto.Hash.SHA1 qualified as SHA1
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import OpenSSL.EVP.Digest qualified as OpenSSL
+import Numeric (showHex)
 
 -- Compresses a strict ByteString using zlib
 compress :: BS.ByteString -> BS.ByteString
@@ -26,17 +27,9 @@ decompress bs =
   where
     safeDecompress input = Right (Zlib.decompress $ BL.fromStrict input)
 
--- Computes the SHA-1 hash of a strict ByteString using OpenSSL
-sha1HashWithOpenSSL :: BS.ByteString -> IO String
-sha1HashWithOpenSSL bs = do
-  digest <- OpenSSL.digestBS OpenSSL.sha1 bs
-  return $ concatMap (`showHex` "") $ BS.unpack digest
-  where
-    showHex :: (Integral a) => a -> String
-    showHex n
-      | n < 16 = '0' : showHex' n
-      | otherwise = showHex' n
-    showHex' = flip showIntAtBase 16 intToDigit
+-- Computes the SHA-1 hash of a strict ByteString
+sha1Hash :: BS.ByteString -> String
+sha1Hash bs = concatMap (`showHex` "") $ BS.unpack $ SHA1.hash bs
 
 -- Converts a decompressed ByteString to Text
 byteStringToText :: BS.ByteString -> Either String T.Text

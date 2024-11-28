@@ -12,7 +12,6 @@ license-file:   LICENSE
 build-type:     Simple
 extra-source-files:
     README.md
-    ChangeLog.md
 
 source-repository head
   type: git
@@ -36,7 +35,7 @@ common common-stanza
     , text >= 2.1.2
     , bytestring
     , zlib
-    , openssl
+    , cryptohash-sha1
   default-language:
     GHC2021
   default-extensions:

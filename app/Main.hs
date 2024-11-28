@@ -10,6 +10,7 @@ import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (except)
 
+
 commands :: [Command]
 commands = [] -- define the commands later
 
