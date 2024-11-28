@@ -32,6 +32,8 @@ common common-stanza
     , random
     , mtl
     , doctest
+    , transformers >0.6.0.5
+    , text >= 2.1.2
   default-language:
     GHC2021
   default-extensions:
@@ -42,6 +44,17 @@ library
       common-stanza
   exposed-modules:
       Lib
+      Branch
+      CommandParser
+      Command
+      Commit
+      Config
+      FileIO
+      GenericParser
+      Hash
+      Head
+      Refs
+      Tree
       -- if you add modules to your project, list them here
       -- so that they will be available to the executable and test suite
   hs-source-dirs:
