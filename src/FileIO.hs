@@ -2,11 +2,11 @@ module FileIO (readFileAsByteString, writeFileFromByteString) where
 
 import Data.ByteString qualified as BS
 
--- Reads a file from the given file path into a strict ByteString
+-- alias for BS.readFile
 readFileAsByteString :: FilePath -> IO BS.ByteString
-readFileAsByteString filePath = BS.readFile filePath
+readFileAsByteString = BS.readFile
 
--- Writes a strict ByteString to a file at the given file path
+-- alias for BS.writeFile
 writeFileFromByteString :: FilePath -> BS.ByteString -> IO ()
-writeFileFromByteString filePath content = BS.writeFile filePath content
+writeFileFromByteString = BS.writeFile
 

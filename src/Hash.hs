@@ -3,6 +3,7 @@ module Hash
     decompress,
     sha1Hash,
     byteStringToText,
+    textToByteString
   )
 where
 
@@ -13,6 +14,7 @@ import Data.ByteString.Lazy qualified as BL
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Numeric (showHex)
+import Data.Text.Encoding.Error (UnicodeException)
 
 -- Compresses a strict ByteString using zlib
 compress :: BS.ByteString -> BS.ByteString
@@ -27,13 +29,21 @@ decompress bs =
   where
     safeDecompress input = Right (Zlib.decompress $ BL.fromStrict input)
 
--- Computes the SHA-1 hash of a strict ByteString
-sha1Hash :: BS.ByteString -> String
-sha1Hash bs = concatMap (`showHex` "") $ BS.unpack $ SHA1.hash bs
+-- | Pads a single hex digit with a leading zero if necessary
+padZero :: String -> String
+padZero s = if length s == 1 then '0' : s else s
 
--- Converts a decompressed ByteString to Text
+-- | Computes the SHA-1 hash of a strict ByteString and returns it as a hexadecimal String
+sha1Hash :: BS.ByteString -> String
+sha1Hash bs = concatMap (padZero . (`showHex` "")) (BS.unpack $ SHA1.hash bs)
+
+-- Converts a ByteString to Text using UTF-8 decoding with error handling
 byteStringToText :: BS.ByteString -> Either String T.Text
 byteStringToText bs =
   case TE.decodeUtf8' bs of
     Right text -> Right text
     Left err -> Left $ "Text decoding error: " ++ show err
+
+-- alias for TE.encodeUtf8
+textToByteString :: T.Text -> BS.ByteString
+textToByteString = TE.encodeUtf8

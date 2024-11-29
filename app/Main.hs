@@ -19,7 +19,7 @@ main = do
   input <- getLine
   result <- runExceptT $ do
     -- Parse the input
-    cmd <- except $ parseInput commands $ words input
+    cmd <- except $ parseInput commands input
     -- Handle the command
     output <- except $ commandHandler cmd
     -- Print the output if it is not empty

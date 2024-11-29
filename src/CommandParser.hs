@@ -1,22 +1,25 @@
-module CommandParser (parseInput, Command(..), CommandError(..), ParsedCommand (..)) where
+module CommandParser where
 
 import Data.List (find, isPrefixOf)
+import qualified Data.Set as Set
+import Data.Maybe (maybeToList)
+import Data.Char (isSpace)
 
-data Command = Command 
+data Command = Command
   { subcommand :: String,
     description :: String,
     flags :: [Flag],
     args :: [String]
   } deriving (Show, Eq)
 
-data FlagType = Optional | Required 
-  deriving (Show, Eq)
+data FlagType = Optional | Required
+  deriving (Show, Eq, Ord)
 
-data Flag = Flag 
+data Flag = Flag
   { longName :: String,
     shortName :: Maybe String,
     flagType :: FlagType
-  } deriving (Show, Eq)
+  } deriving (Show, Eq, Ord)
 
 data ParsedCommand = ParsedCommand
   { parsedSubcommand :: Command
@@ -24,32 +27,36 @@ data ParsedCommand = ParsedCommand
   , parsedArguments :: [String]
   } deriving (Show, Eq)
 
-newtype FlagParser a = FlagParser { runFlagParser :: [(String, String)] -> Either CommandError a }
-
-instance Functor FlagParser where
-  fmap f (FlagParser p) = FlagParser $ \flags -> fmap f (p flags)
-
-instance Applicative FlagParser where
-  pure x = FlagParser $ \_ -> Right x
-  (FlagParser f) <*> (FlagParser p) = FlagParser $ \flags -> do
-    g <- f flags
-    g <$> p flags
-
 newtype CommandError = CommandError String
+  deriving (Show, Eq)
 
--- Parse the input to find the command, flags, and arguments
-parseInput :: [Command] -> [String] -> Either CommandError ParsedCommand
+-- | Parses a string into tokens, respecting quoted substrings.
+tokenizeInput :: String -> [String]
+tokenizeInput input =
+  case dropWhile isSpace input of
+    "" -> []
+    ('"':remaining) ->
+      let (quoted, rest) = break (== '"') remaining
+      in quoted : tokenizeInput (drop 1 rest)
+    remaining ->
+      let (token, rest) = break isSpace remaining
+      in token : tokenizeInput rest
+
+-- | Parse the input to find the command, flags, and arguments
+parseInput :: [Command] -> String -> Either CommandError ParsedCommand
 parseInput commands input = do
-  -- Parse the command
-  (cmd, remaining) <- parseCommand commands input
-
-  -- Parse flags and arguments
+  let tokenizedInput = tokenizeInput input
+  (cmd, remaining) <- parseCommand commands tokenizedInput
   (parsedFlags, args) <- parseFlagsAndArgs (flags cmd) remaining
+  let requiredFlags = [flag | flag <- flags cmd, flagType flag == Required]
+  let providedFlags = map fst parsedFlags
+  let missingFlags = [longName flag | flag <- requiredFlags, longName flag `notElem` providedFlags]
+  case missingFlags of
+    [] -> return $ ParsedCommand cmd parsedFlags args
+    [flag] -> Left $ CommandError $ "Flag " ++ flag ++ " requires a value, but none was provided."
+    _ -> Left $ CommandError $ "Missing required flags: " ++ show missingFlags
 
-  -- Return parsed result
-  return $ ParsedCommand cmd parsedFlags args
-
--- Parse the command from the list of commands
+-- | Parse the command from the list of commands
 parseCommand :: [Command] -> [String] -> Either CommandError (Command, [String])
 parseCommand _ [] = Left $ CommandError "No command provided."
 parseCommand commands (cmd : rest) =
@@ -58,29 +65,32 @@ parseCommand commands (cmd : rest) =
     Nothing -> Left $ CommandError $ "Unknown command: " ++ cmd
 
 parseFlagsAndArgs :: [Flag] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
-parseFlagsAndArgs availableFlags tokens = parseTokens availableFlags tokens [] []
+parseFlagsAndArgs availableFlags tokens = parseTokens availableFlags tokens [] [] []
 
-parseTokens :: [Flag] -> [String] -> [(String, Maybe String)] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
-parseTokens _ [] parsedFlags args = Right (parsedFlags, args)
-parseTokens availableFlags (x:xs) parsedFlags args
-  | isFlag x = handleFlag availableFlags x xs parsedFlags args
-  | otherwise = parseTokens availableFlags xs parsedFlags (args ++ [x])
+parseTokens :: [Flag] -> [String] -> [(String, Maybe String)] -> [String] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
+parseTokens availableFlags [] parsedFlags args _ = Right (reverse parsedFlags, args)
+parseTokens availableFlags (x:xs) parsedFlags args usedFlags
+  | isFlag x = handleFlag availableFlags x xs parsedFlags args usedFlags
+  | otherwise = parseTokens availableFlags xs parsedFlags (args ++ [x]) usedFlags
 
-handleFlag :: [Flag] -> String -> [String] -> [(String, Maybe String)] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
-handleFlag availableFlags flagToken rest parsedFlags args = do
+handleFlag :: [Flag] -> String -> [String] -> [(String, Maybe String)] -> [String] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
+handleFlag availableFlags flagToken rest parsedFlags args usedFlags = do
   flag <- matchFlag flagToken availableFlags
-  case flagType flag of
-    Required -> handleRequiredFlag flag rest parsedFlags args
-    Optional -> handleOptionalFlag flag rest parsedFlags args
+  let conflictingFlagNames = longName flag : maybeToList (shortName flag)
+  if any (`elem` usedFlags) conflictingFlagNames
+    then Left $ CommandError $ "Conflicting flags used: " ++ show (Set.fromList conflictingFlagNames)
+    else case flagType flag of
+      Required -> handleRequiredFlag availableFlags flag rest parsedFlags args (conflictingFlagNames ++ usedFlags)
+      Optional -> handleOptionalFlag availableFlags flag rest parsedFlags args (conflictingFlagNames ++ usedFlags)
 
-handleRequiredFlag :: Flag -> [String] -> [(String, Maybe String)] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
-handleRequiredFlag flag [] _ _ =
+handleRequiredFlag :: [Flag] -> Flag -> [String] -> [(String, Maybe String)] -> [String] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
+handleRequiredFlag availableFlags flag [] _ _ _ =
   Left $ CommandError $ "Flag " ++ longName flag ++ " requires a value, but none was provided."
-handleRequiredFlag flag (value:rest) parsedFlags args =
-  parseTokens [] rest ((longName flag, Just value) : parsedFlags) args
+handleRequiredFlag availableFlags flag (value:rest) parsedFlags args usedFlags =
+  parseTokens availableFlags rest ((longName flag, Just value) : parsedFlags) args usedFlags
 
-handleOptionalFlag :: Flag -> [String] -> [(String, Maybe String)] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
-handleOptionalFlag flag rest parsedFlags = parseTokens [] rest ((longName flag, Nothing) : parsedFlags)
+handleOptionalFlag :: [Flag] -> Flag -> [String] -> [(String, Maybe String)] -> [String] -> [String] -> Either CommandError ([(String, Maybe String)], [String])
+handleOptionalFlag availableFlags flag rest parsedFlags = parseTokens availableFlags rest ((longName flag, Nothing) : parsedFlags)
 
 isFlag :: String -> Bool
 isFlag token = "--" `isPrefixOf` token || (length token > 1 && "-" `isPrefixOf` token)
