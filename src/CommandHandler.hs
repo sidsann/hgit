@@ -4,14 +4,16 @@ import CommandParser (Command (..), CommandError (..), Flag (..), FlagType (..),
 import Control.Exception (SomeException, try)
 import Data.Text qualified (pack)
 import FileIO
-    ( writeFileFromByteString,
-      doesDirectoryExist,
-      createDirectoryIfMissing',
-      createFileIfMissing,
-      getHgitPath,
-      getHeadsPath,
-      getObjectsPath,
-      getHeadPath, getHEADFilePath )
+  ( createDirectoryIfMissing',
+    createFileIfMissing,
+    doesDirectoryExist,
+    getHEADFilePath,
+    getHeadPath,
+    getHeadsPath,
+    getHgitPath,
+    getObjectsPath,
+    writeFileFromByteString,
+  )
 import Hash (stringToByteString)
 
 commands :: [Command]
@@ -19,20 +21,19 @@ commands =
   [ Command
       { subcommand = "init",
         description =
-          "Creates the .hgit directory with necessary subdirectories and files, including an empty HEAD file, an empty objects directory, and refs/heads/ with an empty head file.",
+          "Creates the .hgit directory with necessary subdirectories and files, including an empty HEAD file, an empty objects directory, and refs/heads/ with an empty main file.",
         flags = [],
         args = []
+      },
+    Command
+      { subcommand = "add",
+        description =
+          "Adds file(s) to the index. Supports adding individual files, updating tracked files, or adding all files in the current directory and subdirectories.",
+        flags =
+          [ Flag {longName = "update", shortName = Just "u", flagType = Optional}
+          ],
+        args = ["filename", "."]
       }
-      -- ,
-      -- Command
-      --     { subcommand = "add",
-      --       description =
-      --         "Adds file(s) to the index. Supports adding individual files, updating tracked files, or adding all files in the current directory and subdirectories.",
-      --       flags =
-      --         [ Flag { longName = "update", shortName = Just "u", flagType = Optional }
-      --         ],
-      --       args = [ "filename", "." ]
-      --     }
       -- , Command
       --     { subcommand = "commit",
       --       description =
@@ -194,6 +195,7 @@ commandHandler parsedCmd =
       args = parsedArguments parsedCmd
    in case cmdStr of
         "init" -> handleInit
+        "add" -> handleAdd flags args
         -- "commit" -> handleCommit flags args
         -- "merge" -> handleMerge flags args
         _ -> return $ Left $ CommandError $ "Unknown subcommand: " ++ cmdStr
@@ -229,6 +231,8 @@ handleInit = do
       headPath <- getHEADFilePath
       writeFileFromByteString headPath $ stringToByteString headContent
 
+handleAdd :: [(String, Maybe String)] -> [String] -> IO (Either CommandError String)
+handleAdd = undefined
 
 -- handleCommit :: [(String, Maybe String)] -> [String] -> IO (Either CommandError String)
 -- handleCommit flags args =

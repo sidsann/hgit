@@ -77,11 +77,11 @@ __All of our implemented commands will rely on this object model, and they will 
 
 ## Detailed Command Definitions incl. flags, args, etc.
 **First block of commands to implement:**
-  - hgit init: Will create the .hgit directory in the directory from where this command is given with an empty HEAD file, an empty objects directory, refs directory will just contain heads directory which will just contain an empty file called head
+  - hgit init: Will create the .hgit directory in the directory from where this command is given with an empty HEAD file, an empty objects directory, refs directory will just contain heads directory which will just contain an empty file called main (for main branch)
   - hgit add _______: Will update the index file with the added files, this will involve hashing the added file, seeing if it is already tracked and comparing the hashes, if same, then nothing more to do, if different, then update the hash and write to the objects directory with this file's contents (we're going to ignore optimizing here, we can later check to see if the existing hash is pointed to by any commit, if not we can delete it, maybe using a garbage collection thread which routinely checks for such blobs that are no longer connected to any commit or index)
     - Versions to support: 
       - hgit add filename: as expected (can support only single file name or recursively support many file names here)
-      - hgit add -u: all tracked files in the entire working tree are updated
+      - hgit add -u: all tracked files in the entire working tree are updated (no pathspec allowed)
       - hgit add . : add all files in current directory and in subdirectories including hidden files and directories starting with a . (except for .hgit of course)
   - hgit commit: Create a new commit containing the current contents of the index and the given log message describing the changes. This means that a new commit object will be created and its parent will be the current commit object pointed to by HEAD, and its root tree will be created containing all the blobs or trees for the root dir of the project. This will involve DFS with and from the lowest level dir up we compare OIDs with what's in the objects directory, if it already exists, just point to it, otherwise create it. Keep in mind that this step will not be adding any new blob files (unless we support that option later) so it will only be adding new tree objects (if any) and a commit object.
     - Versions to support:

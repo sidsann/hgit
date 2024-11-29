@@ -97,6 +97,7 @@ isFlag token = "--" `isPrefixOf` token || (length token > 1 && "-" `isPrefixOf` 
 
 matchFlag :: String -> [Flag] -> Either CommandError Flag
 matchFlag token flags =
-  case find (\f -> longName f == token || shortName f == Just token) flags of
-    Just flag -> Right flag
-    Nothing -> Left $ CommandError $ "Unknown flag: " ++ token
+  case filter (\f -> longName f == token || shortName f == Just token) flags of
+    [] -> Left $ CommandError $ "Unknown flag: " ++ token
+    [flag] -> Right flag
+    _ -> Left $ CommandError $ "Ambiguous flag: " ++ token

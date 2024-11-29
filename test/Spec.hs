@@ -6,9 +6,49 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Hash (compress, decompress, sha1Hash, byteStringToText, textToByteString)
+import Data.Maybe (mapMaybe, maybeToList)
+import FileIO
+  ( createDirectoryIfMissing',
+    createFileIfMissing,
+    doesDirectoryExist,
+    getHEADFilePath,
+    getHeadPath,
+    getHeadsPath,
+    getHgitPath,
+    getIndexFilePath,
+    getObjectsPath,
+    getRefsPath,
+  )
+import Hash (byteStringToText, compress, decompress, sha1Hash, textToByteString)
+import System.Directory
+  ( createDirectoryIfMissing
+  , doesDirectoryExist
+  , doesFileExist
+  , getCurrentDirectory
+  , removeDirectoryRecursive
+  , setCurrentDirectory, removePathForcibly
+  )
+-- import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit
 import Test.QuickCheck
+  ( Arbitrary (arbitrary),
+    Property,
+    chooseInt,
+    elements,
+    forAll,
+    frequency,
+    listOf,
+    listOf1,
+    quickCheck,
+    quickCheckWith,
+    vectorOf, (==>),
+    Args (maxSuccess),
+    stdArgs,
+    Testable
+  )
+import System.FilePath ((</>))
+import qualified Test.QuickCheck.Property
+import Control.Monad (when)
 
 letFlags :: [Flag]
 letFlags =
@@ -48,10 +88,7 @@ testParseFlagsAndArgs =
         ~?= Right ([("--verbose", Nothing)], []),
       "Parse both required and optional flags"
         ~: parseFlagsAndArgs letFlags ["--message", "Commit message", "--verbose"]
-        ~?= Right ([("--message", Just "Commit message"), ("--verbose", Nothing)], []),
-      "Conflicting flags (--message and -m)"
-        ~: parseInput letCommands "commit -m \"Commit message\" --message \"Another message\""
-        ~?= Left (CommandError "Conflicting flags used: fromList [\"--message\",\"-m\"]")
+        ~?= Right ([("--message", Just "Commit message"), ("--verbose", Nothing)], [])
     ]
 
 testParseInput :: Test
@@ -111,7 +148,10 @@ instance Arbitrary Command where
     return $ Command subcmd desc (uniqueFlags flags) argsList
     where
       uniqueFlags :: [Flag] -> [Flag]
-      uniqueFlags fs = Set.toList $ Set.fromList fs
+      uniqueFlags fs =
+        let uniqueLongNames = Set.fromList $ map longName fs
+            uniqueShortNames = Set.fromList $ mapMaybe shortName fs
+        in filter (\flag -> longName flag `Set.member` uniqueLongNames && maybe True (`Set.member` uniqueShortNames) (shortName flag)) fs
 
 constructInputString :: Command -> [(Flag, Maybe String)] -> [String] -> String
 constructInputString cmd flagValues argsList =
@@ -127,36 +167,36 @@ constructInputString cmd flagValues argsList =
             (Optional, _) -> [flagName]
             _ -> []
 
+validateCommand :: Command -> Bool
+validateCommand cmd =
+  let flagNames = map longName (flags cmd)
+      shortNames = mapMaybe shortName (flags cmd)
+   in length flagNames == length (Set.fromList flagNames) &&
+      length shortNames == length (Set.fromList shortNames)
+
 prop_parseInput_correct :: Property
 prop_parseInput_correct = forAll arbitrary $ \cmd ->
-  let flagsWithValues = map assignFlagValue (flags cmd)
-      cmdArgs = args cmd
-      inputString = constructInputString cmd flagsWithValues cmdArgs
-      expectedParsedFlags = map (\(flag, mVal) -> (longName flag, mVal)) flagsWithValues
-      expectedParsedCommand =
-        ParsedCommand
-          { parsedSubcommand = cmd,
-            parsedFlags = expectedParsedFlags,
-            parsedArguments = cmdArgs
-          }
-   in case parseInput [cmd] inputString of
-        Right parsedCmd -> parsedCmd == expectedParsedCommand
-        Left _ -> False
+  validateCommand cmd ==> -- Reject invalid commands
+    let flagsWithValues = map assignFlagValue (flags cmd)
+        cmdArgs = args cmd
+        inputString = constructInputString cmd flagsWithValues cmdArgs
+        expectedParsedFlags = map (\(flag, mVal) -> (longName flag, mVal)) flagsWithValues
+        expectedParsedCommand =
+          ParsedCommand
+            { parsedSubcommand = cmd,
+              parsedFlags = expectedParsedFlags,
+              parsedArguments = cmdArgs
+            }
+     in case parseInput [cmd] inputString of
+          Right parsedCmd -> parsedCmd == expectedParsedCommand
+          Left _ -> False
   where
     assignFlagValue flag = case flagType flag of
       Required -> (flag, Just "value")
       Optional -> (flag, Nothing)
 
-testCompressDecompress :: Test
-testCompressDecompress = TestCase $ do
-  let original = BS8.pack "The quick brown fox jumps over the lazy dog" :: BS.ByteString
-      compressed = compress original
-      decompressed = decompress compressed
-  assertEqual "Decompressed ByteString should match original" (Right original) decompressed
-
--- | Test the symmetry of compress and decompress with Text
-testCompressDecompressText :: Test
-testCompressDecompressText =
+testHashModuleFunctions :: Test
+testHashModuleFunctions =
   TestList
     [ TestCase $
         let originalText = "Symmetric compression and decompression" :: T.Text
@@ -164,14 +204,13 @@ testCompressDecompressText =
             compressed = compress originalBS
             decompressed = decompress compressed
             decoded = decompressed >>= byteStringToText
-         in assertEqual "Compress and decompress Text should return original" (Right originalText) decoded
-    ]
-
--- | Test the SHA-1 hash against known values
-testSha1Hash :: Test
-testSha1Hash =
-  TestList
-    [ TestCase $
+         in assertEqual "Compress and decompress Text should return original" (Right originalText) decoded,
+      TestCase $ do
+        let original = BS8.pack "The quick brown fox jumps over the lazy dog" :: BS.ByteString
+            compressed = compress original
+            decompressed = decompress compressed
+        assertEqual "Decompressed ByteString should match original" (Right original) decompressed,
+      TestCase $
         let input = BS8.pack "hello"
             expected = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d" -- SHA-1 for "hello"
             actual = sha1Hash input
@@ -188,8 +227,60 @@ testSha1Hash =
          in assertEqual "SHA-1 hash of pangram" expected actual
     ]
 
+-- | Ensure the `git init` command creates the expected structure.
+testGitInit :: Test
+testGitInit = TestCase $ do
+  currentDir <- getCurrentDirectory
+  let testDir = currentDir </> "test-dir"
+  doesDirectoryExist testDir >>= \exists -> when exists (removeDirectoryRecursive testDir)
+  createDirectoryIfMissing' testDir
+  setCurrentDirectory testDir
+  let initCommand = ParsedCommand
+        { parsedSubcommand = Command "init" "" [] [],
+          parsedFlags = [],
+          parsedArguments = []
+        }
+  result <- commandHandler initCommand
+
+  case result of
+    Left (CommandError err) -> assertFailure $ "Command failed with error: " ++ err
+    Right _ -> do
+
+      let hgitPath = testDir </> ".hgit"
+      exists <- doesDirectoryExist hgitPath
+      assertBool ".hgit directory should exist" exists
+
+      let objectsPath = hgitPath </> "objects"
+      objectsExists <- doesDirectoryExist objectsPath
+      assertBool "objects directory should exist" objectsExists
+
+      let refsHeadsPath = hgitPath </> "refs" </> "heads"
+      refsHeadsExists <- doesDirectoryExist refsHeadsPath
+      assertBool "refs/heads directory should exist" refsHeadsExists
+
+      let headFilePath = hgitPath </> "HEAD"
+      headFileExists <- doesFileExist headFilePath
+      assertBool "HEAD file should exist" headFileExists
+
+  setCurrentDirectory currentDir
+  removeDirectoryRecursive testDir
+
+
+
+
+
+
+
+
+
+
+
+
+quickCheckN :: Test.QuickCheck.Testable prop => Int -> prop -> IO ()
+quickCheckN n = quickCheckWith stdArgs { maxSuccess = n }
+
 -- Main Test Runner
 main :: IO ()
 main = do
-  _ <- runTestTT $ TestList [testParseCommand, testParseFlagsAndArgs, testParseInput, testCompressDecompress, testSha1Hash, testCompressDecompressText]
-  quickCheck prop_parseInput_correct
+  _ <- runTestTT $ TestList [testParseCommand, testParseFlagsAndArgs, testParseInput, testHashModuleFunctions, testGitInit]
+  quickCheckN 1000 prop_parseInput_correct

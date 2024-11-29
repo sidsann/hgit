@@ -37,6 +37,7 @@ common common-stanza
     , zlib
     , cryptohash-sha1
     , diff3
+    , temporary
   default-language:
     GHC2021
   default-extensions:
