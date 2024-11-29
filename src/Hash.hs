@@ -3,7 +3,8 @@ module Hash
     decompress,
     sha1Hash,
     byteStringToText,
-    textToByteString
+    textToByteString,
+    stringToByteString
   )
 where
 
@@ -15,6 +16,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Numeric (showHex)
 import Data.Text.Encoding.Error (UnicodeException)
+import qualified Data.Text
 
 -- Compresses a strict ByteString using zlib
 compress :: BS.ByteString -> BS.ByteString
@@ -47,3 +49,7 @@ byteStringToText bs =
 -- alias for TE.encodeUtf8
 textToByteString :: T.Text -> BS.ByteString
 textToByteString = TE.encodeUtf8
+
+-- string to text and text to bytestring
+stringToByteString :: String -> BS.ByteString
+stringToByteString = TE.encodeUtf8.Data.Text.pack
