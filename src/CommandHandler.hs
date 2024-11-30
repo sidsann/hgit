@@ -1,8 +1,9 @@
 module CommandHandler (commandHandler, commands) where
 
-import CommandParser (Command (..), CommandError (..), Flag (..), FlagType (..), ParsedCommand (..))
-import Control.Exception (SomeException, try)
+import CommandParser (Command (..), CommandError (..), Flag (..), FlagType (..), ParsedCommand (..), defaultValidate)
+import Control.Exception (SomeException, try, throwIO)
 import Data.Text qualified (pack)
+import Index ( readIndexFile, writeIndexFile, updateIndex )
 import FileIO
   ( createDirectoryIfMissing',
     createFileIfMissing,
@@ -15,6 +16,7 @@ import FileIO
     writeFileFromByteString,
   )
 import Hash (stringToByteString)
+import Control.Monad (unless, when)
 
 commands :: [Command]
 commands =
@@ -23,16 +25,16 @@ commands =
         description =
           "Creates the .hgit directory with necessary subdirectories and files, including an empty HEAD file, an empty objects directory, and refs/heads/ with an empty main file.",
         flags = [],
-        args = []
+        validate = defaultValidate
       },
     Command
       { subcommand = "add",
         description =
           "Adds file(s) to the index. Supports adding individual files, updating tracked files, or adding all files in the current directory and subdirectories.",
         flags =
-          [ Flag {longName = "update", shortName = Just "u", flagType = Optional}
+          [ Flag {longName = "update", shortName = Just "u", flagType = NoArg}
           ],
-        args = ["filename", "."]
+          validate = validateAddCommand
       }
       -- , Command
       --     { subcommand = "commit",
@@ -188,38 +190,41 @@ commands =
       -- }
   ]
 
+-- | Main command handler that dispatches commands
 commandHandler :: ParsedCommand -> IO (Either CommandError String)
-commandHandler parsedCmd =
+commandHandler parsedCmd = do
   let cmdStr = subcommand . parsedSubcommand $ parsedCmd
       flags = parsedFlags parsedCmd
       args = parsedArguments parsedCmd
-   in case cmdStr of
-        "init" -> handleInit
-        "add" -> handleAdd flags args
-        -- "commit" -> handleCommit flags args
-        -- "merge" -> handleMerge flags args
-        _ -> return $ Left $ CommandError $ "Unknown subcommand: " ++ cmdStr
 
--- | Helper function to handle exceptions and convert them to CommandError
-runCommand :: IO () -> IO (Either CommandError ())
-runCommand action = do
-  result <- try action
+  -- Check if the repository exists for all commands except 'init'
+  when (cmdStr /= "init") $ do
+    repoExists <- doesDirectoryExist =<< getHgitPath
+    unless repoExists $
+      throwIO $ userError ".hgit doesn't exist, call 'hgit init' first"
+
+  -- Dispatch the command with exception handling
+  result <- try $ case cmdStr of
+    "init" -> handleInit
+    "add" -> handleAdd flags args
+    -- Add other command handlers here
+    _ -> throwIO $ userError $ "Unknown subcommand: " ++ cmdStr
+
+  -- Convert exceptions to CommandError
   case result of
     Left (ex :: SomeException) -> return $ Left (CommandError $ show ex)
-    Right _ -> return $ Right ()
+    Right output -> return $ Right output
 
--- Initialized .hgit repo, but don't have main branch pointing to any commit just yet!!
-handleInit :: IO (Either CommandError String)
+-- | Initializes the .hgit repository
+handleInit :: IO String
 handleInit = do
   hgitPath <- getHgitPath
   repoExists <- doesDirectoryExist hgitPath
   if repoExists
-    then return $ Right "hgit repository already exists. No action taken."
+    then return "hgit repository already exists. No action taken."
     else do
-      result <- runCommand initializeRepository
-      case result of
-        Left err -> return $ Left err
-        Right _ -> return $ Right ""
+      initializeRepository
+      return ""
   where
     initializeRepository :: IO ()
     initializeRepository = do
@@ -231,8 +236,37 @@ handleInit = do
       headPath <- getHEADFilePath
       writeFileFromByteString headPath $ stringToByteString headContent
 
-handleAdd :: [(String, Maybe String)] -> [String] -> IO (Either CommandError String)
-handleAdd = undefined
+validateAddCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
+validateAddCommand flags args =
+  case (flags, args) of
+    -- Only -u flag provided
+    ([("update", Nothing)], []) -> Right ()
+    -- Only '.' arg provided
+    ([], ["."]) -> Right ()
+    -- Only arguments provided
+    ([], _:_) -> Right ()
+    -- Invalid combination
+    _ -> Left $ CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"
+
+-- | Handles the 'add' command
+handleAdd :: [(String, Maybe String)] -> [String] -> IO String
+handleAdd flags args = do
+  indexMap <- readIndexFile
+  updatedIndexMapResult <- updateIndex indexMap args flags
+  case updatedIndexMapResult of
+    Left err -> throwIO $ userError $ show err
+    Right updatedIndexMap -> do
+      writeIndexFile updatedIndexMap
+      return ""
+
+-- if file titled index doesn't yet exist in .hgit, then create it. Once we know it exists,
+-- iterate through it and load into memory the currently tracked files by OID and file path,
+-- which we would initially store with absolute paths. Once loaded in, we can then add a file,
+-- if the file path exists, then it is already being tracked, and if the checksum is different,
+-- then create a new blob file in objects/ and assign the filepath in index file the new OID
+-- this is pretty much all we need to do with add since git status can actually make sure that
+-- all the files we're tracking actually still exist or not, or if they've been modified since
+-- they were last added, or just untracked in general
 
 -- handleCommit :: [(String, Maybe String)] -> [String] -> IO (Either CommandError String)
 -- handleCommit flags args =

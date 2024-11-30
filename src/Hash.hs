@@ -4,7 +4,8 @@ module Hash
     sha1Hash,
     byteStringToText,
     textToByteString,
-    stringToByteString
+    stringToByteString,
+    byteStringToString
   )
 where
 
@@ -53,3 +54,6 @@ textToByteString = TE.encodeUtf8
 -- string to text and text to bytestring
 stringToByteString :: String -> BS.ByteString
 stringToByteString = TE.encodeUtf8.Data.Text.pack
+
+byteStringToString :: BS.ByteString -> Either UnicodeException String
+byteStringToString bs =   T.unpack <$> TE.decodeUtf8' bs
