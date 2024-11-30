@@ -12,7 +12,8 @@ module FileIO
     getIndexFilePath,
     doesDirectoryExist,
     encodeUtf8,
-    getHEADFilePath
+    getHEADFilePath,
+    createObject
   )
 where
 
@@ -25,6 +26,20 @@ import System.Directory (
 import System.FilePath ( (</>) )
 import Control.Exception (catch, SomeException)
 import Data.Text.Encoding (encodeUtf8)
+import Control.Monad (unless)
+import Hash (compress)
+
+-- | Creates an object in the .hgit/objects directory
+createObject :: String -> BS.ByteString -> IO ()
+createObject oid content = do
+  objectsPath <- getObjectsPath
+  let (dirName, fileName) = splitAt 2 oid
+  let dirPath = objectsPath </> dirName
+  let filePath = dirPath </> fileName
+  dirExists <- doesDirectoryExist dirPath
+  unless dirExists $ createDirectoryIfMissing' dirPath
+  fileExists <- doesFileExist filePath
+  unless fileExists $ BS.writeFile filePath (compress content)
 
 -- | Reads a file as a ByteString
 readFileAsByteString :: FilePath -> IO BS.ByteString

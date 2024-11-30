@@ -37,6 +37,7 @@ common common-stanza
     , zlib
     , cryptohash-sha1
     , diff3
+    , time
   default-language:
     GHC2021
   default-extensions:
@@ -50,14 +51,9 @@ library
       CommandParser
       CommandHandler
       Commit
-      Config
       FileIO
       Hash
-      Head
-      Refs
-      Tree
       Index
-      
       -- if you add modules to your project, list them here
       -- so that they will be available to the executable and test suite
   hs-source-dirs:

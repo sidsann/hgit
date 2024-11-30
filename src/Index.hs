@@ -2,7 +2,6 @@ module Index
   ( readIndexFile,
     writeIndexFile,
     updateIndex,
-    createBlobObject,
     getAllFiles,
     getTrackedFiles
   ) where
@@ -12,7 +11,8 @@ import FileIO
     ( doesDirectoryExist,
       createDirectoryIfMissing',
       getObjectsPath,
-      getIndexFilePath )
+      getIndexFilePath,
+      createObject )
 import Hash
 import System.Directory (doesFileExist, listDirectory, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath ((</>), normalise, makeRelative)
@@ -122,20 +122,8 @@ processFileContents indexMap filepath = do
   if existingOid == Just oid
     then return $ Right Nothing  -- No changes needed
     else do
-      createBlobObject oid content
+      createObject oid content
       return $ Right $ Just (normalizedPath, oid)
-
--- | Creates a blob object in the .hgit/objects directory
-createBlobObject :: String -> ByteString -> IO ()
-createBlobObject oid content = do
-  objectsPath <- getObjectsPath
-  let (dirName, fileName) = splitAt 2 oid
-  let dirPath = objectsPath </> dirName
-  let filePath = dirPath </> fileName
-  dirExists <- doesDirectoryExist dirPath
-  unless dirExists $ createDirectoryIfMissing' dirPath
-  fileExists <- doesFileExist filePath
-  unless fileExists $ BS.writeFile filePath (compress content)
 
 -- | Gets all files in the current directory recursively, excluding the .hgit directory
 getAllFiles :: IO [FilePath]

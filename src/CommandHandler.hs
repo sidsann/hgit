@@ -1,9 +1,13 @@
 module CommandHandler (commandHandler, commands) where
 
 import CommandParser (Command (..), CommandError (..), Flag (..), FlagType (..), ParsedCommand (..), defaultValidate)
-import Control.Exception (SomeException, try, throwIO)
+import Commit
+import Control.Exception (SomeException, throwIO, try)
+import Control.Monad (unless, when)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified (pack)
-import Index ( readIndexFile, writeIndexFile, updateIndex )
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import FileIO
   ( createDirectoryIfMissing',
     createFileIfMissing,
@@ -16,7 +20,7 @@ import FileIO
     writeFileFromByteString,
   )
 import Hash (stringToByteString)
-import Control.Monad (unless, when)
+import Index (readIndexFile, updateIndex, writeIndexFile)
 
 commands :: [Command]
 commands =
@@ -34,19 +38,16 @@ commands =
         flags =
           [ Flag {longName = "update", shortName = Just "u", flagType = NoArg}
           ],
-          validate = validateAddCommand
+        validate = validateAddCommand
+      },
+    Command
+      { subcommand = "commit",
+        description =
+          "Creates a new commit from the current index with a commit message. Supports committing with a message, amending the last commit, or using the previous commit message.",
+        flags =
+          [Flag {longName = "message", shortName = Just "m", flagType = RequiresArg}],
+        validate = validateCommitCommand
       }
-      -- , Command
-      --     { subcommand = "commit",
-      --       description =
-      --         "Creates a new commit from the current index with a commit message. Supports committing with a message, amending the last commit, or using the previous commit message.",
-      --       flags =
-      --         [ Flag { longName = "message", shortName = Just "m", flagType = Required },
-      --           Flag { longName = "amend", shortName = Nothing, flagType = Optional },
-      --           Flag { longName = "no-edit", shortName = Nothing, flagType = Optional }
-      --         ],
-      --       args = []
-      --     }
       -- , Command
       --     { subcommand = "branch",
       --       description =
@@ -201,12 +202,14 @@ commandHandler parsedCmd = do
   when (cmdStr /= "init") $ do
     repoExists <- doesDirectoryExist =<< getHgitPath
     unless repoExists $
-      throwIO $ userError ".hgit doesn't exist, call 'hgit init' first"
+      throwIO $
+        userError ".hgit doesn't exist, call 'hgit init' first"
 
   -- Dispatch the command with exception handling
   result <- try $ case cmdStr of
     "init" -> handleInit
     "add" -> handleAdd flags args
+    "commit" -> handleCommit flags args
     -- Add other command handlers here
     _ -> throwIO $ userError $ "Unknown subcommand: " ++ cmdStr
 
@@ -244,9 +247,17 @@ validateAddCommand flags args =
     -- Only '.' arg provided
     ([], ["."]) -> Right ()
     -- Only arguments provided
-    ([], _:_) -> Right ()
+    ([], _ : _) -> Right ()
     -- Invalid combination
     _ -> Left $ CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"
+
+validateCommitCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
+validateCommitCommand flags args =
+  case (flags, args) of
+    -- Only -m flag provided
+    ([("message", Nothing)], []) -> Right ()
+    -- Invalid combination
+    _ -> Left $ CommandError "Invalid usage of 'hgit commit'. Use 'hgit commit -m \"msg\"'.'"
 
 -- | Handles the 'add' command
 handleAdd :: [(String, Maybe String)] -> [String] -> IO String
@@ -258,6 +269,34 @@ handleAdd flags args = do
     Right updatedIndexMap -> do
       writeIndexFile updatedIndexMap
       return ""
+
+handleCommit :: [(String, Maybe String)] -> [String] -> IO String
+handleCommit flags args = do
+  let Just (Just commitMsg) = lookup "message" flags
+  indexMap <- readIndexFile
+  when (Map.null indexMap) $
+    error "Nothing to commit. The index is empty."
+
+  -- Build tree object from index
+  treeOid <- buildTree indexMap
+
+  -- Get current time as timestamp
+  currentTime <- getCurrentTime
+  let timestamp = formatTime defaultTimeLocale "%s" currentTime
+
+  -- Determine parent commit (if any)
+  parentOid <- getCurrentCommitOid
+
+  -- Create commit object content
+  let commitContent = createCommitContent treeOid parentOid timestamp commitMsg
+
+  -- Create commit object
+  commitOid <- createObject commitContent
+
+  -- Update HEAD reference
+  updateHEAD commitOid
+
+  return $ "Committed as " ++ commitOid
 
 -- if file titled index doesn't yet exist in .hgit, then create it. Once we know it exists,
 -- iterate through it and load into memory the currently tracked files by OID and file path,
