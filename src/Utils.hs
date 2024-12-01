@@ -101,7 +101,10 @@ createObject content = do
         dirPath = objectsPath </> dirName
         filePath = dirPath </> fileName
     createDirectoryIfMissing' dirPath
-    BS.writeFile filePath compressedContent
+    -- Check if the object already exists 
+    exists <- doesFileExist filePath
+    unless exists $ do
+        BS.writeFile filePath compressedContent
     return oid
 
 -- | Helper function to read and decompress an object
