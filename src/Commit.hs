@@ -12,17 +12,17 @@ import System.FilePath
     ( (</>),
       takeDirectory,
       takeFileName,
-      takeDirectory,
-      takeFileName,
       (</>), splitDirectories )
 import qualified Data.ByteString.Char8 as BS8
-import Data.List (sort)
+import Data.List (sort, isPrefixOf)
 import qualified Data.ByteString as BS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (formatTime, defaultTimeLocale)
 
 buildTree :: Map FilePath String -> IO String
-buildTree indexMap = buildTreeRecursive "" indexMap
+buildTree = buildTreeRecursive ""
 
 buildTreeRecursive :: FilePath -> Map FilePath String -> IO String
 buildTreeRecursive dirPath indexMap = do
@@ -34,7 +34,8 @@ buildTreeRecursive dirPath indexMap = do
     let blobEntries = Map.toList entriesInDir
 
     -- Process subtrees
-    subTreeOids <- Map.traverseWithKey (\k _ -> buildTreeRecursive k indexMap) $ collectSubDirs entriesInSubDirs
+    let subDirs = collectSubDirs entriesInSubDirs
+    subTreeOids <- Map.traverseWithKey (\subDir _ -> buildTreeRecursive subDir indexMap) subDirs
 
     -- Build tree entries
     let blobTreeEntries = map (\(path, oid) -> buildTreeEntry "blob" oid (takeFileName path)) blobEntries
@@ -59,7 +60,7 @@ isSubdirectory :: FilePath -> FilePath -> Bool
 isSubdirectory dir path =
     let dirComponents = splitPathComponents dir
         pathComponents = splitPathComponents (takeDirectory path)
-    in dirComponents `BS.isPrefixOf` pathComponents && dirComponents /= pathComponents
+    in dirComponents `isPrefixOf` pathComponents && dirComponents /= pathComponents
 
 -- Split a path into components
 splitPathComponents :: FilePath -> [FilePath]
@@ -90,10 +91,6 @@ getCurrentCommitOid = do
         then return Nothing -- No parent commit
         else return $ Just oidStr
     else return Nothing -- No parent commit
-
--- | Writes the commit object to the objects directory
-createCommitObject :: String -> BS.ByteString -> IO ()
-createCommitObject = createObject "commit"
 
 -- | Updates the HEAD reference to point to the new commit
 updateHEAD :: String -> IO ()

@@ -122,7 +122,7 @@ processFileContents indexMap filepath = do
   if existingOid == Just oid
     then return $ Right Nothing  -- No changes needed
     else do
-      createObject oid content
+      createObject content
       return $ Right $ Just (normalizedPath, oid)
 
 -- | Gets all files in the current directory recursively, excluding the .hgit directory

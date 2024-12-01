@@ -27,19 +27,22 @@ import System.FilePath ( (</>) )
 import Control.Exception (catch, SomeException)
 import Data.Text.Encoding (encodeUtf8)
 import Control.Monad (unless)
-import Hash (compress)
+import Hash (compress, sha1Hash)
 
 -- | Creates an object in the .hgit/objects directory
-createObject :: String -> BS.ByteString -> IO ()
-createObject oid content = do
-  objectsPath <- getObjectsPath
-  let (dirName, fileName) = splitAt 2 oid
-  let dirPath = objectsPath </> dirName
-  let filePath = dirPath </> fileName
-  dirExists <- doesDirectoryExist dirPath
-  unless dirExists $ createDirectoryIfMissing' dirPath
-  fileExists <- doesFileExist filePath
-  unless fileExists $ BS.writeFile filePath (compress content)
+createObject :: BS.ByteString -> IO String
+createObject content = do
+    -- Compute the OID as SHA-1 hash of the content
+    let oid = sha1Hash content
+        compressedContent = compress content
+    -- Store the object
+    objectsPath <- getObjectsPath
+    let (dirName, fileName) = splitAt 2 oid
+        dirPath = objectsPath </> dirName
+        filePath = dirPath </> fileName
+    createDirectoryIfMissing' dirPath
+    BS.writeFile filePath compressedContent
+    return oid
 
 -- | Reads a file as a ByteString
 readFileAsByteString :: FilePath -> IO BS.ByteString

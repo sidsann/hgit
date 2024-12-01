@@ -2,6 +2,7 @@ module CommandHandler (commandHandler, commands) where
 
 import CommandParser (Command (..), CommandError (..), Flag (..), FlagType (..), ParsedCommand (..), defaultValidate)
 import Commit
+    ( buildTree, createCommitContent, getCurrentCommitOid, updateHEAD )
 import Control.Exception (SomeException, throwIO, try)
 import Control.Monad (unless, when)
 import Data.Map.Strict qualified as Map
@@ -18,6 +19,7 @@ import FileIO
     getHgitPath,
     getObjectsPath,
     writeFileFromByteString,
+    createObject
   )
 import Hash (stringToByteString)
 import Index (readIndexFile, updateIndex, writeIndexFile)
@@ -90,47 +92,13 @@ commands =
       --       flags = [],
       --       args = []
       --     }
-      -- , Command
-      --     { subcommand = "merge",
-      --       description =
-      --         "Merges another branch into the current branch.",
-      --       flags = [],
-      --       args = [ "branchname" ]
-      --     }
-      -- , Command
-      --     { subcommand = "rebase",
-      --       description =
-      --         "Rebases the current branch onto another branch, replaying commits to create a linear history.",
-      --       flags = [],
-      --       args = [ "branchname" ]
-      --     }
+      
       -- , Command
       --     { subcommand = "clean",
       --       description =
       --         "Removes untracked files from the working tree.",
       --       flags = [],
       --       args = []
-      --     }
-      -- , Command
-      --     { subcommand = "diff",
-      --       description =
-      --         "Shows differences between commits, commit and working tree, etc.",
-      --       flags = [],
-      --       args = []
-      --     }
-      -- , Command
-      --     { subcommand = "cherry-pick",
-      --       description =
-      --         "Applies the changes introduced by existing commits onto the current branch.",
-      --       flags = [],
-      --       args = [ "commit-hash" ]
-      --     }
-      -- , Command
-      --     { subcommand = "range-diff",
-      --       description =
-      --         "Compares two ranges of commits.",
-      --       flags = [],
-      --       args = [ "range1", "range2" ]
       --     }
       -- , Command
       --     { subcommand = "reset",
@@ -179,16 +147,6 @@ commands =
       --       flags = [],
       --       args = []
       --     }
-      -- , Command
-      --     { subcommand = "config",
-      --       description =
-      --         "Gets and sets repository or global options like user name and email.",
-      --       flags =
-      --         [ Flag { longName = "user.name", shortName = Nothing, flagType = Required },
-      --           Flag { longName = "user.email", shortName = Nothing, flagType = Required }
-      --         ],
-      --       args = [ "value" ]
-      -- }
   ]
 
 -- | Main command handler that dispatches commands
@@ -218,7 +176,6 @@ commandHandler parsedCmd = do
     Left (ex :: SomeException) -> return $ Left (CommandError $ show ex)
     Right output -> return $ Right output
 
--- | Initializes the .hgit repository
 handleInit :: IO String
 handleInit = do
   hgitPath <- getHgitPath
@@ -242,24 +199,17 @@ handleInit = do
 validateAddCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
 validateAddCommand flags args =
   case (flags, args) of
-    -- Only -u flag provided
     ([("update", Nothing)], []) -> Right ()
-    -- Only '.' arg provided
     ([], ["."]) -> Right ()
-    -- Only arguments provided
     ([], _ : _) -> Right ()
-    -- Invalid combination
     _ -> Left $ CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"
 
 validateCommitCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
 validateCommitCommand flags args =
   case (flags, args) of
-    -- Only -m flag provided
-    ([("message", Nothing)], []) -> Right ()
-    -- Invalid combination
+    ([("message", Just msg)], []) | not (null msg) -> Right ()
     _ -> Left $ CommandError "Invalid usage of 'hgit commit'. Use 'hgit commit -m \"msg\"'.'"
 
--- | Handles the 'add' command
 handleAdd :: [(String, Maybe String)] -> [String] -> IO String
 handleAdd flags args = do
   indexMap <- readIndexFile
@@ -276,45 +226,11 @@ handleCommit flags args = do
   indexMap <- readIndexFile
   when (Map.null indexMap) $
     error "Nothing to commit. The index is empty."
-
-  -- Build tree object from index
   treeOid <- buildTree indexMap
-
-  -- Get current time as timestamp
   currentTime <- getCurrentTime
   let timestamp = formatTime defaultTimeLocale "%s" currentTime
-
-  -- Determine parent commit (if any)
   parentOid <- getCurrentCommitOid
-
-  -- Create commit object content
   let commitContent = createCommitContent treeOid parentOid timestamp commitMsg
-
-  -- Create commit object
   commitOid <- createObject commitContent
-
-  -- Update HEAD reference
   updateHEAD commitOid
-
   return $ "Committed as " ++ commitOid
-
--- if file titled index doesn't yet exist in .hgit, then create it. Once we know it exists,
--- iterate through it and load into memory the currently tracked files by OID and file path,
--- which we would initially store with absolute paths. Once loaded in, we can then add a file,
--- if the file path exists, then it is already being tracked, and if the checksum is different,
--- then create a new blob file in objects/ and assign the filepath in index file the new OID
--- this is pretty much all we need to do with add since git status can actually make sure that
--- all the files we're tracking actually still exist or not, or if they've been modified since
--- they were last added, or just untracked in general
-
--- handleCommit :: [(String, Maybe String)] -> [String] -> IO (Either CommandError String)
--- handleCommit flags args =
---   case lookup "--message" flags of
---     Just (Just message) -> Right $ "Committing with message: " ++ message
---     _ -> Left $ CommandError "The '--message' flag is required for 'commit'."
-
--- handleMerge :: [(String, Maybe String)] -> [String] -> IO (Either CommandError String)
--- handleMerge flags args =
---   case args of
---     (branch : _) -> Right $ "Merging branch: " ++ branch
---     [] -> Left $ CommandError "A branch name is required for 'merge'."
