@@ -13,7 +13,8 @@ module FileIO
     doesDirectoryExist,
     encodeUtf8,
     getHEADFilePath,
-    createObject
+    createObject,
+    readAndDecompressObject
   )
 where
 
@@ -27,7 +28,7 @@ import System.FilePath ( (</>) )
 import Control.Exception (catch, SomeException)
 import Data.Text.Encoding (encodeUtf8)
 import Control.Monad (unless)
-import Hash (compress, sha1Hash)
+import Hash (compress, sha1Hash, decompress)
 
 -- | Creates an object in the .hgit/objects directory
 createObject :: BS.ByteString -> IO String
@@ -43,6 +44,20 @@ createObject content = do
     createDirectoryIfMissing' dirPath
     BS.writeFile filePath compressedContent
     return oid
+
+-- | Helper function to read and decompress an object
+readAndDecompressObject :: String -> IO (Either String BS.ByteString)
+readAndDecompressObject oid = do
+  let (dir, file) = splitAt 2 oid
+  let objectPath = ".hgit/objects" </> dir </> file
+  exists <- doesFileExist objectPath
+  if not exists
+    then return $ Left $ "Object does not exist: " ++ oid
+    else do
+      compressedContent <- BS.readFile objectPath
+      case decompress compressedContent of
+        Left err -> return $ Left err
+        Right content -> return $ Right content
 
 -- | Reads a file as a ByteString
 readFileAsByteString :: FilePath -> IO BS.ByteString

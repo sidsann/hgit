@@ -80,6 +80,13 @@ test-suite hgit-test
       Spec.hs
   hs-source-dirs:
       test
+ other-modules:
+      Parser,
+      Commit,
+      Add,
+      Hash,
+      Init,
+      Utils
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       hgit

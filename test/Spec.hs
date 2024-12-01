@@ -17,14 +17,31 @@ import CommandParser
     parseFlagsAndArgs,
     parseInput,
   )
-import Control.Monad (forM_, when)
+import Commit
+  ( Commit (..),
+    Tree (..),
+    buildTree,
+    createCommitContent,
+    deserializeCommit,
+    deserializeTree,
+    getCurrentCommitOid,
+    updateHEAD,
+  )
+import Control.Exception (SomeException, try)
+import Control.Monad (filterM, forM, forM_, unless, when)
 import Data.Bifunctor qualified
+import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
+import Data.List (isPrefixOf, sort)
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe, maybeToList)
+import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Text.Encoding.Error (UnicodeException)
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import FileIO
   ( createDirectoryIfMissing',
     createFileIfMissing,
@@ -36,19 +53,21 @@ import FileIO
     getIndexFilePath,
     getObjectsPath,
     getRefsPath,
+    readFileAsByteString,
+    writeFileFromByteString,
   )
-import Hash (byteStringToText, compress, decompress, sha1Hash, textToByteString)
-import Index (readIndexFile)
+import Hash (byteStringToText, compress, decompress, sha1Hash, stringToByteString, textToByteString)
+import Index (readIndexFile, writeIndexFile)
 import System.Directory
   ( createDirectoryIfMissing,
     doesDirectoryExist,
     doesFileExist,
     getCurrentDirectory,
+    listDirectory,
     removeDirectoryRecursive,
-    removePathForcibly,
     setCurrentDirectory,
   )
-import System.FilePath (normalise, takeDirectory, (</>))
+import System.FilePath (makeRelative, normalise, splitDirectories, takeDirectory, takeFileName, (</>))
 import Test.HUnit
 import Test.QuickCheck
   ( Arbitrary (arbitrary),
@@ -65,46 +84,47 @@ import Test.QuickCheck
     quickCheck,
     quickCheckWith,
     stdArgs,
-    vectorOf,
     (==>),
   )
-import Test.QuickCheck.Property qualified
 
 -- | Validation function that allows any flags and arguments
 testValidate :: [(String, Maybe String)] -> [String] -> Either CommandError ()
 testValidate _ _ = Right ()
 
-letFlagsAdd :: [Flag]
-letFlagsAdd =
-  [ Flag "update" (Just "u") NoArg
-  ]
-
-letFlagsInit :: [Flag]
-letFlagsInit = []
-
 letCommands :: [Command]
-letCommands =
-  [ Command "add" "Add files to the index" letFlagsAdd testValidate,
-    Command "init" "Initialize a new repository" letFlagsInit testValidate
-  ]
+letCommands = commands
 
 -- | Helper function to create multiple files with specified content
 createFiles :: [(FilePath, String)] -> IO ()
 createFiles = mapM_ (\(f, content) -> createDirectoryIfMissing True (takeDirectory f) >> writeFile f content)
 
--- | Runs the 'git add' command with given flags and arguments
-runAddCommand :: [(String, Maybe String)] -> [String] -> IO ()
-runAddCommand flags args = do
-  let addCmd = head letCommands -- "add" command
-  let parsedAddCmd =
+-- | Runs a specified command with given flags and arguments
+runCommand :: Command -> [(String, Maybe String)] -> [String] -> IO (Either CommandError String)
+runCommand cmd flags args = do
+  let parsedCmd =
         ParsedCommand
-          { parsedSubcommand = addCmd,
+          { parsedSubcommand = cmd,
             parsedFlags = flags,
             parsedArguments = args
           }
-  resultAdd <- commandHandler parsedAddCmd
+  commandHandler parsedCmd
+
+-- | Runs the 'git add' command with given flags and arguments
+runAddCommand :: [(String, Maybe String)] -> [String] -> IO ()
+runAddCommand flags args = do
+  let addCmd = letCommands !! 1 -- "add" command
+  resultAdd <- runCommand addCmd flags args
   case resultAdd of
     Left (CommandError err) -> assertFailure $ "Add command failed: " ++ err
+    Right _ -> return ()
+
+-- | Runs the 'git commit' command with given flags and arguments
+runCommitCommand :: [(String, Maybe String)] -> [String] -> IO ()
+runCommitCommand flags args = do
+  let commitCmd = letCommands !! 2 -- "commit" command
+  resultCommit <- runCommand commitCmd flags args
+  case resultCommit of
+    Left (CommandError err) -> assertFailure $ "Commit command failed: " ++ err
     Right _ -> return ()
 
 -- | Verifies that specified files are present or absent in the index
@@ -118,7 +138,7 @@ verifyIndex checks = do
       else assertBool (file ++ " should not be in index") (not $ Map.member normalizedFile indexMap)
 
 -- | Verifies that blob files exist for specified files and match expected content
-verifyBlobExists :: FilePath -> String -> String -> IO ()
+verifyBlobExists :: FilePath -> FilePath -> String -> IO ()
 verifyBlobExists testDir file content = do
   indexMap <- readIndexFile
   let oid = indexMap Map.! file
@@ -147,14 +167,8 @@ withTestRepo action = do
   setCurrentDirectory testDir
 
   -- Initialize repository
-  let initCmd = letCommands !! 1 -- "init" command
-  let initParsedCmd =
-        ParsedCommand
-          { parsedSubcommand = initCmd,
-            parsedFlags = [],
-            parsedArguments = []
-          }
-  resultInit <- commandHandler initParsedCmd
+  let initCmd = head letCommands -- "init" command
+  resultInit <- runCommand initCmd [] []
   case resultInit of
     Left (CommandError err) -> do
       setCurrentDirectory originalDir
@@ -165,15 +179,16 @@ withTestRepo action = do
       setCurrentDirectory originalDir
       removeDirectoryRecursive testDir
 
+-- Parsing-related Tests
 testParseCommand :: Test
 testParseCommand =
   TestList
     [ "Valid Command 'add'"
         ~: parseCommand letCommands ["add"]
-        ~?= Right (head letCommands, []),
+        ~?= Right (letCommands !! 1, []),
       "Valid Command 'init'"
         ~: parseCommand letCommands ["init"]
-        ~?= Right (letCommands !! 1, []),
+        ~?= Right (head letCommands, []),
       "Invalid Command"
         ~: parseCommand letCommands ["status"]
         ~?= Left (CommandError "Unknown command: status")
@@ -183,16 +198,16 @@ testParseFlagsAndArgs :: Test
 testParseFlagsAndArgs =
   TestList
     [ "Parse no-arg flag (--update)"
-        ~: parseFlagsAndArgs letFlagsAdd ["--update"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["--update"]
         ~?= Right ([("update", Nothing)], []),
       "Parse short flag (-u)"
-        ~: parseFlagsAndArgs letFlagsAdd ["-u"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["-u"]
         ~?= Right ([("update", Nothing)], []),
       "Parse arguments"
-        ~: parseFlagsAndArgs letFlagsAdd ["file1.txt", "file2.txt"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["file1.txt", "file2.txt"]
         ~?= Right ([], ["file1.txt", "file2.txt"]),
       "Parse flags and arguments"
-        ~: parseFlagsAndArgs letFlagsAdd ["--update", "file1.txt"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["--update", "file1.txt"]
         ~?= Right ([("update", Nothing)], ["file1.txt"])
     ]
 
@@ -201,18 +216,12 @@ testParseInput =
   TestList
     [ "Parse 'add' with no flags or args"
         ~: parseInput letCommands "add"
-        ~?= Right
-          ( ParsedCommand
-              { parsedSubcommand = head letCommands,
-                parsedFlags = [],
-                parsedArguments = []
-              }
-          ),
+        ~?= Left (CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"),
       "Parse 'add' with --update flag"
         ~: parseInput letCommands "add --update"
         ~?= Right
           ( ParsedCommand
-              { parsedSubcommand = head letCommands,
+              { parsedSubcommand = letCommands !! 1,
                 parsedFlags = [("update", Nothing)],
                 parsedArguments = []
               }
@@ -221,39 +230,190 @@ testParseInput =
         ~: parseInput letCommands "add file1.txt file2.txt"
         ~?= Right
           ( ParsedCommand
-              { parsedSubcommand = head letCommands,
+              { parsedSubcommand = letCommands !! 1,
                 parsedFlags = [],
                 parsedArguments = ["file1.txt", "file2.txt"]
               }
           ),
       "Parse 'add' with flags and files"
         ~: parseInput letCommands "add -u file1.txt"
-        ~?= Right
-          ( ParsedCommand
-              { parsedSubcommand = head letCommands,
-                parsedFlags = [("update", Nothing)],
-                parsedArguments = ["file1.txt"]
-              }
-          ),
+        ~?= Left (CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"),
       "Parse 'init' with no flags or args"
         ~: parseInput letCommands "init"
         ~?= Right
           ( ParsedCommand
-              { parsedSubcommand = letCommands !! 1,
+              { parsedSubcommand = head letCommands,
                 parsedFlags = [],
                 parsedArguments = []
               }
           ),
       "Parse 'init' with unexpected args"
         ~: parseInput letCommands "init extra"
-        ~?= Right
-          ( ParsedCommand
-              { parsedSubcommand = letCommands !! 1,
-                parsedFlags = [],
-                parsedArguments = ["extra"]
-              }
-          )
+        ~?= Left (CommandError "This command does not accept any flags or arguments.")
     ]
+
+-- | Validation function to ensure no flag conflicts
+validateCommand :: Command -> Bool
+validateCommand cmd =
+  let flagNames = map longName (flags cmd)
+      shortNames = mapMaybe shortName (flags cmd)
+      longNamesSet = Set.fromList flagNames
+      shortNamesSet = Set.fromList shortNames
+      uniqueLongNames = length flagNames == Set.size longNamesSet
+      uniqueShortNames = length shortNames == Set.size shortNamesSet
+      noOverlap = Set.null $ Set.intersection longNamesSet shortNamesSet
+   in uniqueLongNames && uniqueShortNames && noOverlap
+
+-- | Property to test that parseInput correctly parses commands
+prop_parseInput_correct :: Property
+prop_parseInput_correct = forAll arbitrary $ \cmd ->
+  validateCommand cmd ==>
+    let flagsWithValues = map assignFlagValue (flags cmd)
+        inputString = constructInputString cmd flagsWithValues []
+        expectedParsedFlags = map (Data.Bifunctor.first longName) flagsWithValues
+        expectedParsedCommand =
+          ParsedCommand
+            { parsedSubcommand = cmd,
+              parsedFlags = expectedParsedFlags,
+              parsedArguments = []
+            }
+     in case parseInput [cmd] inputString of
+          Right parsedCmd -> parsedCmd == expectedParsedCommand
+          Left err -> error $ "Parser failed with error: " ++ show err
+  where
+    assignFlagValue :: Flag -> (Flag, Maybe String)
+    assignFlagValue flag = case flagType flag of
+      RequiresArg -> (flag, Just "value")
+      NoArg -> (flag, Nothing)
+
+constructInputString :: Command -> [(Flag, Maybe String)] -> [String] -> String
+constructInputString cmd flagValues argsList =
+  unwords $ [subcommand cmd] ++ flagStrings ++ argsList
+  where
+    flagStrings = concatMap flagToString flagValues
+    flagToString (flag, mValue) =
+      let flagName = case shortName flag of
+            Just sName -> "-" ++ sName
+            Nothing -> "--" ++ longName flag
+       in case (flagType flag, mValue) of
+            (RequiresArg, Just val) -> [flagName, "\"" ++ val ++ "\""]
+            (NoArg, _) -> [flagName]
+            _ -> []
+
+instance Arbitrary FlagType where
+  arbitrary = elements [NoArg, RequiresArg]
+
+instance Arbitrary Flag where
+  arbitrary = do
+    long <- listOf1 (elements ['a' .. 'z'])
+    short <- frequency [(1, Just <$> listOf1 (elements ['a' .. 'z'])), (1, return Nothing)]
+    Flag long short <$> arbitrary
+
+instance Arbitrary Command where
+  arbitrary = do
+    subcmd <- listOf1 $ elements ['a' .. 'z']
+    desc <- listOf $ elements $ ['a' .. 'z'] ++ [' ']
+    numFlags <- chooseInt (0, 5)
+    flags <- generateUniqueFlags numFlags
+    return $ Command subcmd desc flags testValidate
+
+generateUniqueFlags :: Int -> Gen [Flag]
+generateUniqueFlags n = go n [] []
+  where
+    go 0 _ _ = return []
+    go count usedLongNames usedShortNames = do
+      long <- listOf1 (elements ['a' .. 'z'])
+      if long `elem` usedLongNames
+        then go count usedLongNames usedShortNames
+        else do
+          mShort <- frequency [(1, Just <$> listOf1 (elements ['a' .. 'z'])), (1, return Nothing)]
+          let shortValid = case mShort of
+                Just short -> short `notElem` usedShortNames && short /= long
+                Nothing -> True
+          if not shortValid
+            then go count usedLongNames usedShortNames
+            else do
+              flagType <- arbitrary
+              let newUsedLongNames = long : usedLongNames
+              let newUsedShortNames = maybe usedShortNames (: usedShortNames) mShort
+              rest <- go (count - 1) newUsedLongNames newUsedShortNames
+              return $ Flag long mShort flagType : rest
+
+-- Hash Module Tests
+
+testHashModuleFunctions :: Test
+testHashModuleFunctions =
+  TestList
+    [ TestCase $
+        let originalText = "Symmetric compression and decompression" :: T.Text
+            originalBS = textToByteString originalText
+            compressed = compress originalBS
+            decompressed = decompress compressed
+            decoded = decompressed >>= byteStringToText
+         in assertEqual "Compress and decompress Text should return original" (Right originalText) decoded,
+      TestCase $ do
+        let original = BS8.pack "The quick brown fox jumps over the lazy dog" :: BS.ByteString
+            compressed = compress original
+            decompressed = decompress compressed
+        assertEqual "Decompressed ByteString should match original" (Right original) decompressed,
+      TestCase $
+        let input = BS8.pack "hello"
+            expected = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d" -- SHA-1 for "hello"
+            actual = sha1Hash input
+         in assertEqual "SHA-1 hash of 'hello'" expected actual,
+      TestCase $
+        let input = BS8.pack ""
+            expected = "da39a3ee5e6b4b0d3255bfef95601890afd80709" -- SHA-1 for empty string
+            actual = sha1Hash input
+         in assertEqual "SHA-1 hash of empty ByteString" expected actual,
+      TestCase $
+        let input = BS8.pack "The quick brown fox jumps over the lazy dog"
+            expected = "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12" -- SHA-1 for the given string
+            actual = sha1Hash input
+         in assertEqual "SHA-1 hash of pangram" expected actual
+    ]
+
+-- Git Init Tests
+
+-- | Ensure the `git init` command creates the expected structure.
+testGitInit :: Test
+testGitInit = TestCase $ do
+  currentDir <- getCurrentDirectory
+  let testDir = currentDir </> "test-dir"
+  doesDirectoryExist testDir >>= \exists -> when exists (removeDirectoryRecursive testDir)
+  createDirectoryIfMissing' testDir
+  setCurrentDirectory testDir
+  let initCommand =
+        ParsedCommand
+          { parsedSubcommand = Command "init" "" [] defaultValidate,
+            parsedFlags = [],
+            parsedArguments = []
+          }
+  result <- commandHandler initCommand
+
+  case result of
+    Left (CommandError err) -> assertFailure $ "Command failed with error: " ++ err
+    Right _ -> do
+      let hgitPath = testDir </> ".hgit"
+      exists <- doesDirectoryExist hgitPath
+      assertBool ".hgit directory should exist" exists
+
+      let objectsPath = hgitPath </> "objects"
+      objectsExists <- doesDirectoryExist objectsPath
+      assertBool "objects directory should exist" objectsExists
+
+      let refsHeadsPath = hgitPath </> "refs" </> "heads"
+      refsHeadsExists <- doesDirectoryExist refsHeadsPath
+      assertBool "refs/heads directory should exist" refsHeadsExists
+
+      let headFilePath = hgitPath </> "HEAD"
+      headFileExists <- doesFileExist headFilePath
+      assertBool "HEAD file should exist" headFileExists
+
+  setCurrentDirectory currentDir
+  removeDirectoryRecursive testDir
+
+-- Git Add Tests
 
 -- | Test adding a single file
 testAddSingleFile :: Test
@@ -483,131 +643,6 @@ testBlobFileManagement = TestCase $ withTestRepo $ \testDir -> do
     updatedOid
     finalOid
 
--- | Validation function to ensure no flag conflicts
-validateCommand :: Command -> Bool
-validateCommand cmd =
-  let flagNames = map longName (flags cmd)
-      shortNames = mapMaybe shortName (flags cmd)
-      longNamesSet = Set.fromList flagNames
-      shortNamesSet = Set.fromList shortNames
-      uniqueLongNames = length flagNames == Set.size longNamesSet
-      uniqueShortNames = length shortNames == Set.size shortNamesSet
-      noOverlap = Set.null $ Set.intersection longNamesSet shortNamesSet
-   in uniqueLongNames && uniqueShortNames && noOverlap
-
--- | Property to test that parseInput correctly parses commands
-prop_parseInput_correct :: Property
-prop_parseInput_correct = forAll arbitrary $ \cmd ->
-  validateCommand cmd ==>
-    let flagsWithValues = map assignFlagValue (flags cmd)
-        inputString = constructInputString cmd flagsWithValues []
-        expectedParsedFlags = map (Data.Bifunctor.first longName) flagsWithValues
-        expectedParsedCommand =
-          ParsedCommand
-            { parsedSubcommand = cmd,
-              parsedFlags = expectedParsedFlags,
-              parsedArguments = []
-            }
-     in case parseInput [cmd] inputString of
-          Right parsedCmd -> parsedCmd == expectedParsedCommand
-          Left err -> error $ "Parser failed with error: " ++ show err
-  where
-    assignFlagValue :: Flag -> (Flag, Maybe String)
-    assignFlagValue flag = case flagType flag of
-      RequiresArg -> (flag, Just "value")
-      NoArg -> (flag, Nothing)
-
-constructInputString :: Command -> [(Flag, Maybe String)] -> [String] -> String
-constructInputString cmd flagValues argsList =
-  unwords $ [subcommand cmd] ++ flagStrings ++ argsList
-  where
-    flagStrings = concatMap flagToString flagValues
-    flagToString (flag, mValue) =
-      let flagName = case shortName flag of
-            Just sName -> "-" ++ sName
-            Nothing -> "--" ++ longName flag
-       in case (flagType flag, mValue) of
-            (RequiresArg, Just val) -> [flagName, "\"" ++ val ++ "\""]
-            (NoArg, _) -> [flagName]
-            _ -> []
-
-instance Arbitrary FlagType where
-  arbitrary = elements [NoArg, RequiresArg]
-
-instance Arbitrary Flag where
-  arbitrary = do
-    long <- listOf1 (elements ['a' .. 'z'])
-    short <- frequency [(1, Just <$> listOf1 (elements ['a' .. 'z'])), (1, return Nothing)]
-    Flag long short <$> arbitrary
-
-instance Arbitrary Command where
-  arbitrary = do
-    subcmd <- listOf1 $ elements ['a' .. 'z']
-    desc <- listOf $ elements $ ['a' .. 'z'] ++ [' ']
-    numFlags <- chooseInt (0, 5)
-    flags <- generateUniqueFlags numFlags
-    return $ Command subcmd desc flags testValidate
-
-generateUniqueFlags :: Int -> Gen [Flag]
-generateUniqueFlags n = go n [] []
-  where
-    go 0 _ _ = return []
-    go count usedLongNames usedShortNames = do
-      long <- listOf1 (elements ['a' .. 'z'])
-      if long `elem` usedLongNames
-        then go count usedLongNames usedShortNames
-        else do
-          mShort <- frequency [(1, Just <$> listOf1 (elements ['a' .. 'z'])), (1, return Nothing)]
-          let shortValid = case mShort of
-                Just short -> short `notElem` usedShortNames && short /= long
-                Nothing -> True
-          if not shortValid
-            then go count usedLongNames usedShortNames
-            else do
-              flagType <- arbitrary
-              let newUsedLongNames = long : usedLongNames
-              let newUsedShortNames = maybe usedShortNames (: usedShortNames) mShort
-              rest <- go (count - 1) newUsedLongNames newUsedShortNames
-              return $ Flag long mShort flagType : rest
-
--- | Ensure the `git init` command creates the expected structure.
-testGitInit :: Test
-testGitInit = TestCase $ do
-  currentDir <- getCurrentDirectory
-  let testDir = currentDir </> "test-dir"
-  doesDirectoryExist testDir >>= \exists -> when exists (removeDirectoryRecursive testDir)
-  createDirectoryIfMissing' testDir
-  setCurrentDirectory testDir
-  let initCommand =
-        ParsedCommand
-          { parsedSubcommand = Command "init" "" [] defaultValidate,
-            parsedFlags = [],
-            parsedArguments = []
-          }
-  result <- commandHandler initCommand
-
-  case result of
-    Left (CommandError err) -> assertFailure $ "Command failed with error: " ++ err
-    Right _ -> do
-      let hgitPath = testDir </> ".hgit"
-      exists <- doesDirectoryExist hgitPath
-      assertBool ".hgit directory should exist" exists
-
-      let objectsPath = hgitPath </> "objects"
-      objectsExists <- doesDirectoryExist objectsPath
-      assertBool "objects directory should exist" objectsExists
-
-      let refsHeadsPath = hgitPath </> "refs" </> "heads"
-      refsHeadsExists <- doesDirectoryExist refsHeadsPath
-      assertBool "refs/heads directory should exist" refsHeadsExists
-
-      let headFilePath = hgitPath </> "HEAD"
-      headFileExists <- doesFileExist headFilePath
-      assertBool "HEAD file should exist" headFileExists
-
-  setCurrentDirectory currentDir
-  removeDirectoryRecursive testDir
-
 -- | Tests for the `git add` command
 testGitAdd :: Test
 testGitAdd =
@@ -623,40 +658,249 @@ testGitAdd =
         TestLabel "Blob file management" testBlobFileManagement
       ]
 
--- | Hash module tests
-testHashModuleFunctions :: Test
-testHashModuleFunctions =
-  TestList
-    [ TestCase $
-        let originalText = "Symmetric compression and decompression" :: T.Text
-            originalBS = textToByteString originalText
-            compressed = compress originalBS
-            decompressed = decompress compressed
-            decoded = decompressed >>= byteStringToText
-         in assertEqual "Compress and decompress Text should return original" (Right originalText) decoded,
-      TestCase $ do
-        let original = BS8.pack "The quick brown fox jumps over the lazy dog" :: BS.ByteString
-            compressed = compress original
-            decompressed = decompress compressed
-        assertEqual "Decompressed ByteString should match original" (Right original) decompressed,
-      TestCase $
-        let input = BS8.pack "hello"
-            expected = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d" -- SHA-1 for "hello"
-            actual = sha1Hash input
-         in assertEqual "SHA-1 hash of 'hello'" expected actual,
-      TestCase $
-        let input = BS8.pack ""
-            expected = "da39a3ee5e6b4b0d3255bfef95601890afd80709" -- SHA-1 for empty string
-            actual = sha1Hash input
-         in assertEqual "SHA-1 hash of empty ByteString" expected actual,
-      TestCase $
-        let input = BS8.pack "The quick brown fox jumps over the lazy dog"
-            expected = "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12" -- SHA-1 for the given string
-            actual = sha1Hash input
-         in assertEqual "SHA-1 hash of pangram" expected actual
-    ]
+-- Git Commit Tests
 
--- | Main Test Runner
+-- | Asserts that a commit command fails with a CommandError
+assertCommitFailure :: [(String, Maybe String)] -> [String] -> IO ()
+assertCommitFailure flags args = do
+  let commitCmd = letCommands !! 2 -- "commit" command
+  result <- runCommand commitCmd flags args
+  case result of
+    Left _ -> return () -- Expected to fail
+    Right _ -> assertFailure "Expected commit to fail, but it succeeded."
+
+-- | Verifies that a commit contains the expected properties
+verifyCommit :: FilePath -> String -> Maybe String -> String -> IO ()
+verifyCommit testDir commitOid expectedParentOid expectedMessage = do
+  -- Deserialize commit
+  commitResult <- deserializeCommit commitOid
+  case commitResult of
+    Left err -> assertFailure $ "Failed to deserialize commit: " ++ err
+    Right commit -> do
+      -- Verify parent pointer
+      assertEqual "Commit parent OID mismatch" expectedParentOid (parentOid commit)
+      -- Verify commit message
+      assertEqual "Commit message mismatch" expectedMessage (message commit)
+      -- Verify commit references correct tree
+      indexMap <- readIndexFile
+      expectedTreeOid <- buildTree indexMap
+      assertEqual "Commit tree OID mismatch" expectedTreeOid (treeOid commit)
+
+-- | Test committing without -m flag should fail
+testCommitWithoutMessage :: Test
+testCommitWithoutMessage = TestCase $ withTestRepo $ \_testDir -> do
+  assertCommitFailure [] []
+
+-- | Test committing with empty message should fail
+testCommitWithEmptyMessage :: Test
+testCommitWithEmptyMessage = TestCase $ withTestRepo $ \_testDir -> do
+  assertCommitFailure [("message", Just "")] []
+
+-- | Test initial commit without previous commits
+testInitialCommit :: Test
+testInitialCommit = TestCase $ withTestRepo $ \testDir -> do
+  -- Create and add files
+  let files =
+        [ ("file1.txt", "Hello World"),
+          ("file2.txt", "Initial commit file")
+        ]
+  createFiles files
+
+  -- Add files to index
+  runAddCommand [] ["file1.txt", "file2.txt"]
+
+  -- Commit with message
+  runCommitCommand [("message", Just "Initial commit")] []
+
+  -- Get current commit OID from HEAD
+  headOid <- getHeadCommitOid testDir
+
+  -- Verify commit
+  verifyCommit testDir headOid Nothing "Initial commit"
+
+-- | Test multiple commits and verify parent pointers
+testMultipleCommits :: Test
+testMultipleCommits = TestCase $ withTestRepo $ \testDir -> do
+  -- Initial commit
+  let files1 =
+        [ ("file1.txt", "Hello World"),
+          ("file2.txt", "Initial commit file")
+        ]
+  createFiles files1
+  runAddCommand [] ["file1.txt", "file2.txt"]
+  runCommitCommand [("message", Just "Initial commit")] []
+
+  -- Get first commit OID
+  headOid1 <- getHeadCommitOid testDir
+
+  -- Modify a file and commit again
+  let files2 = [("file1.txt", "Hello World Updated")]
+  createFiles files2
+  runAddCommand [] ["file1.txt"]
+  runCommitCommand [("message", Just "Second commit")] []
+
+  -- Get second commit OID
+  headOid2 <- getHeadCommitOid testDir
+
+  -- Verify second commit
+  verifyCommit testDir headOid2 (Just headOid1) "Second commit"
+
+-- | Test committing when there are no changes should create a new commit or fail
+testCommitNoChanges :: Test
+testCommitNoChanges = TestCase $ withTestRepo $ \testDir -> do
+  -- Initial commit
+  let files =
+        [ ("file1.txt", "Hello World"),
+          ("file2.txt", "Initial commit file")
+        ]
+  createFiles files
+  runAddCommand [] ["file1.txt", "file2.txt"]
+  runCommitCommand [("message", Just "Initial commit")] []
+
+  -- Attempt to commit again without changes
+  runCommitCommand [("message", Just "No changes commit")] []
+
+  -- Get current commit OID
+  headOid <- getHeadCommitOid testDir
+
+  -- Verify commit
+  verifyCommit testDir headOid (Just headOid) "No changes commit"
+
+-- | Test committing with additional files after initial commit
+testCommitWithAdditionalFiles :: Test
+testCommitWithAdditionalFiles = TestCase $ withTestRepo $ \testDir -> do
+  -- Initial commit
+  let files1 =
+        [ ("file1.txt", "Hello World"),
+          ("file2.txt", "Initial commit file")
+        ]
+  createFiles files1
+  runAddCommand [] ["file1.txt", "file2.txt"]
+  runCommitCommand [("message", Just "Initial commit")] []
+
+  -- Get first commit OID
+  headOid1 <- getHeadCommitOid testDir
+
+  -- Add a new file and commit
+  let files2 = [("file3.txt", "New file in second commit")]
+  createFiles files2
+  runAddCommand [] ["file3.txt"]
+  runCommitCommand [("message", Just "Added file3.txt")] []
+
+  -- Get second commit OID
+  headOid2 <- getHeadCommitOid testDir
+
+  -- Verify second commit
+  verifyCommit testDir headOid2 (Just headOid1) "Added file3.txt"
+
+-- | Test committing multiple times and verifying parent pointers and tree structure
+testCommitSequence :: Test
+testCommitSequence = TestCase $ withTestRepo $ \testDir -> do
+  -- Commit 1
+  let files1 =
+        [ ("file1.txt", "Hello World"),
+          ("file2.txt", "Initial commit file")
+        ]
+  createFiles files1
+  runAddCommand [] ["file1.txt", "file2.txt"]
+  runCommitCommand [("message", Just "Initial commit")] []
+
+  -- Get first commit OID
+  headOid1 <- getHeadCommitOid testDir
+
+  -- Commit 2
+  let files2 = [("file1.txt", "Hello World Updated"), ("file3.txt", "New file in commit 2")]
+  createFiles files2
+  runAddCommand [] ["file1.txt", "file3.txt"]
+  runCommitCommand [("message", Just "Second commit")] []
+
+  -- Get second commit OID
+  headOid2 <- getHeadCommitOid testDir
+
+  -- Commit 3
+  let files3 = [("file4.txt", "Another new file in commit 3")]
+  createFiles files3
+  runAddCommand [] ["file4.txt"]
+  runCommitCommand [("message", Just "Third commit")] []
+
+  -- Get third commit OID
+  headOid3 <- getHeadCommitOid testDir
+
+  -- Verify third commit
+  verifyCommit testDir headOid3 (Just headOid2) "Third commit"
+
+-- | Test committing object structure with subtrees
+testCommitObjectStructure :: Test
+testCommitObjectStructure = TestCase $ withTestRepo $ \testDir -> do
+  -- Create and add files
+  let files =
+        [ ("file1.txt", "Hello World"),
+          ("file2.txt", "Initial commit file"),
+          ("src/main.hs", "main function"),
+          ("src/utils/helpers.hs", "Helper functions")
+        ]
+  createFiles files
+
+  -- Add all files
+  runAddCommand [] ["file1.txt", "file2.txt", "src/main.hs", "src/utils/helpers.hs"]
+
+  -- Commit with message
+  runCommitCommand [("message", Just "Initial commit with src")] []
+
+  -- Get current commit OID
+  headOid <- getHeadCommitOid testDir
+
+  -- Deserialize commit
+  commitResult <- deserializeCommit headOid
+  case commitResult of
+    Left err -> assertFailure $ "Failed to deserialize commit: " ++ err
+    Right commit -> do
+      -- Verify commit
+      assertEqual "Commit should have no parent" Nothing (parentOid commit)
+      assertEqual "Commit message should match" "Initial commit with src" (message commit)
+
+      -- Deserialize tree
+      treeResult <- deserializeTree (treeOid commit)
+      case treeResult of
+        Left err -> assertFailure $ "Failed to deserialize tree: " ++ err
+        Right tree -> do
+          -- Verify tree structure
+          let treeEntriesMap = Map.fromList [(name, oid) | (_, oid, name) <- treeEntries tree]
+          forM_ files $ \(file, _) -> do
+            let fileName = takeFileName file
+            if takeDirectory file == "."
+              then assertBool ("Tree should contain " ++ fileName) (fileName `Map.member` treeEntriesMap)
+              else do
+                let dirName = head $ splitDirectories (takeDirectory file)
+                assertBool ("Tree should contain subtree " ++ dirName) (dirName `Map.member` treeEntriesMap)
+
+-- | Collection of all commit tests
+testCommit :: Test
+testCommit =
+  TestLabel "Commit Command Tests" $
+    TestList
+      [ TestLabel "Commit Without Message" testCommitWithoutMessage,
+        TestLabel "Commit With Empty Message" testCommitWithEmptyMessage,
+        TestLabel "Initial Commit" testInitialCommit,
+        TestLabel "Multiple Commits" testMultipleCommits,
+        TestLabel "Commit Without Changes" testCommitNoChanges,
+        TestLabel "Commit With Additional Files" testCommitWithAdditionalFiles,
+        TestLabel "Commit Sequence" testCommitSequence,
+        TestLabel "Commit Object Structure with Subtrees" testCommitObjectStructure
+      ]
+
+-- | Helper function to get the commit OID from HEAD
+getHeadCommitOid :: FilePath -> IO String
+getHeadCommitOid testDir = do
+  -- Read the 'HEAD' file to get the ref path
+  headRefBS <- readFileAsByteString (testDir </> ".hgit" </> "HEAD")
+  let headRef = BS8.unpack $ BS8.strip headRefBS  -- e.g., "refs/heads/main"
+  let refFilePath = testDir </> ".hgit" </> headRef
+  -- Read the commit OID from the ref file
+  headOidBS <- readFileAsByteString refFilePath
+  return $ BS8.unpack $ BS8.strip headOidBS
+-- Main Test Runner
+
 main :: IO ()
 main = do
   -- Run HUnit Tests
@@ -668,7 +912,8 @@ main = do
           testParseInput,
           testHashModuleFunctions,
           testGitInit,
-          testGitAdd
+          testGitAdd,
+          testCommit
         ]
 
   -- Run QuickCheck Properties

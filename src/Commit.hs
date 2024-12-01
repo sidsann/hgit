@@ -1,81 +1,164 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use newtype instead of data" #-}
 module Commit where
 
 import CommandParser (CommandError (..))
 import Control.Monad (unless, when)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
-import FileIO ( getHgitPath, getHEADFilePath, createObject )
-import Hash ( stringToByteString )
+import FileIO
+  ( getHgitPath,
+    getHEADFilePath,
+    createObject,
+    getObjectsPath, readAndDecompressObject
+  )
+import Hash (stringToByteString, decompress)
 import Index (readIndexFile)
 import System.Directory (doesFileExist)
 import System.FilePath
-    ( (</>),
-      takeDirectory,
-      takeFileName,
-      (</>), splitDirectories )
+  ( (</>),
+    takeDirectory,
+    takeFileName,
+    splitDirectories
+  )
 import qualified Data.ByteString.Char8 as BS8
 import Data.List (sort, isPrefixOf)
-import qualified Data.ByteString as BS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Time.Clock (getCurrentTime)
-import Data.Time.Format (formatTime, defaultTimeLocale)
+import Data.Maybe (fromMaybe)
 
+-- | Data structure representing a Commit
+data Commit = Commit
+  { treeOid :: String,
+    parentOid :: Maybe String,
+    timestamp :: String,
+    message :: String
+  }
+  deriving (Show, Eq)
+
+-- | Data structure representing a Tree
+data Tree = Tree
+  { treeEntries :: [(String, String, String)] -- (Type, OID, Name)
+  }
+  deriving (Show, Eq)
+
+-- | Helper function to deserialize a commit object
+deserializeCommit :: String -> IO (Either String Commit)
+deserializeCommit oid = do
+  objResult <- readAndDecompressObject oid
+  case objResult of
+    Left err -> return $ Left err
+    Right content -> parseCommitContent content
+
+-- | Helper function to parse commit content
+parseCommitContent :: BS.ByteString -> IO (Either String Commit)
+parseCommitContent content = do
+  let linesOfContent = BS8.lines content
+  let parseLine line =
+        let (key, rest) = BS8.break (== ' ') line
+            value = BS8.unpack $ BS8.drop 1 rest
+         in (BS8.unpack key, value)
+  let parsed = map parseLine linesOfContent
+  let commitMap = Map.fromList parsed
+  let treeOidVal = Map.lookup "tree" commitMap
+  let parentOidVal = Map.lookup "parent" commitMap
+  let timestampVal = Map.lookup "timestamp" commitMap
+  -- Assume commit message is the last line after a blank line
+  let messageVal = case dropWhile (/= BS.empty) (BS8.lines content) of
+        [] -> Nothing
+        (_ : msgLines) -> Just $ BS8.unpack $ BS8.unlines msgLines
+  case (treeOidVal, messageVal) of
+    (Just treeOid, Just message) -> return $ Right Commit
+      { treeOid = treeOid,
+        parentOid = parentOidVal,
+        timestamp = fromMaybe "" timestampVal,
+        message = message
+      }
+    _ -> return $ Left "Invalid commit object format."
+
+-- | Deserialize a tree object from its OID
+deserializeTree :: String -> IO (Either String Tree)
+deserializeTree oid = do
+  objResult <- readAndDecompressObject oid
+  case objResult of
+    Left err -> return $ Left $ "Tree object not found: " ++ err
+    Right content -> parseTree content
+
+-- | Parse tree content into Tree data structure
+parseTree :: BS.ByteString -> IO (Either String Tree)
+parseTree content = do
+  let linesOfContent = BS8.lines content
+  let entries = map parseTreeEntry linesOfContent
+  return $ Right $ Tree entries
+
+-- | Parse a single tree entry line
+-- Format: "type oid name"
+parseTreeEntry :: BS.ByteString -> (String, String, String)
+parseTreeEntry line =
+  let (typeBS, rest1) = BS8.break (== ' ') line
+      (oidBS, rest2) = BS8.break (== ' ') (BS8.drop 1 rest1)
+      nameBS = BS8.drop 1 rest2
+  in (BS8.unpack typeBS, BS8.unpack oidBS, BS8.unpack nameBS)
+
+-- | Build tree OID from index
 buildTree :: Map FilePath String -> IO String
 buildTree = buildTreeRecursive ""
 
 buildTreeRecursive :: FilePath -> Map FilePath String -> IO String
 buildTreeRecursive dirPath indexMap = do
-    -- Separate entries into blobs and subtrees
-    let entriesInDir = Map.filterWithKey (\k _ -> takeDirectory k == dirPath) indexMap
-    let entriesInSubDirs = Map.filterWithKey (\k _ -> isSubdirectory dirPath k) indexMap
+  -- Separate entries into blobs and subtrees
+  let entriesInDir = Map.filterWithKey (\k _ -> takeDirectory k == dirPath) indexMap
+  let entriesInSubDirs = Map.filterWithKey (\k _ -> isSubdirectory dirPath k) indexMap
 
-    -- Process blobs (files in the current directory)
-    let blobEntries = Map.toList entriesInDir
+  -- Process blobs (files in the current directory)
+  let blobEntries = Map.toList entriesInDir
 
-    -- Process subtrees
-    let subDirs = collectSubDirs entriesInSubDirs
-    subTreeOids <- Map.traverseWithKey (\subDir _ -> buildTreeRecursive subDir indexMap) subDirs
+  -- Process subtrees
+  let subDirs = collectSubDirs entriesInSubDirs
+  subTreeOids <- Map.traverseWithKey (\subDir _ -> buildTreeRecursive subDir indexMap) subDirs
 
-    -- Build tree entries
-    let blobTreeEntries = map (\(path, oid) -> buildTreeEntry "blob" oid (takeFileName path)) blobEntries
-    let treeTreeEntries = map (\(dir, oid) -> buildTreeEntry "tree" oid (takeFileName dir)) $ Map.toList subTreeOids
+  -- Build tree entries
+  let blobTreeEntries = map (\(path, oid) -> buildTreeEntry "blob" oid (takeFileName path)) blobEntries
+  let treeTreeEntries = map (\(dir, oid) -> buildTreeEntry "tree" oid (takeFileName dir)) $ Map.toList subTreeOids
 
-    let treeContent = BS.concat $ sort $ blobTreeEntries ++ treeTreeEntries
+  let treeContent = BS.concat $ sort $ blobTreeEntries ++ treeTreeEntries
 
-    -- Create tree object
-    createObject treeContent
+  -- Create tree object and return its OID
+  createObject treeContent
 
--- Helper function to collect unique subdirectories
+-- | Collect unique subdirectories
 collectSubDirs :: Map FilePath a -> Map FilePath ()
 collectSubDirs = Map.fromList . map (\k -> (takeDirectory k, ())) . Map.keys
 
+-- | Create a tree entry
 buildTreeEntry :: String -> String -> String -> BS.ByteString
 buildTreeEntry objType oid name =
-    let entryLine = objType ++ " " ++ oid ++ " " ++ name ++ "\n"
-    in BS8.pack entryLine
+  let entryLine = objType ++ " " ++ oid ++ " " ++ name ++ "\n"
+  in BS8.pack entryLine
 
--- Check if a path is a subdirectory of another
+-- | Check if a path is a subdirectory of another
 isSubdirectory :: FilePath -> FilePath -> Bool
 isSubdirectory dir path =
-    let dirComponents = splitPathComponents dir
-        pathComponents = splitPathComponents (takeDirectory path)
-    in dirComponents `isPrefixOf` pathComponents && dirComponents /= pathComponents
+  let dirComponents = splitPathComponents dir
+      pathComponents = splitPathComponents (takeDirectory path)
+  in dirComponents `isPrefixOf` pathComponents && dirComponents /= pathComponents
 
--- Split a path into components
+-- | Split a path into components
 splitPathComponents :: FilePath -> [FilePath]
 splitPathComponents = splitDirectories
 
+-- | Create commit content
 createCommitContent :: String -> Maybe String -> String -> String -> BS.ByteString
 createCommitContent treeOid parentOid timestamp commitMsg =
-    let parentLine = maybe "" (\oid -> "parent " ++ oid ++ "\n") parentOid
-        content = "tree " ++ treeOid ++ "\n"
-                  ++ parentLine
-                  ++ "timestamp " ++ timestamp ++ " +0000\n"
-                  ++ commitMsg ++ "\n"
-    in BS8.pack content
+  let parentLine = maybe "" (\oid -> "parent " ++ oid ++ "\n") parentOid
+      content =
+        "tree " ++ treeOid ++ "\n" ++
+        parentLine ++
+        "timestamp " ++ timestamp ++ " +0000\n" ++
+        commitMsg ++ "\n"
+  in BS8.pack content
 
--- | Gets the current commit OID from HEAD
+-- | Get the current commit OID from HEAD
 getCurrentCommitOid :: IO (Maybe String)
 getCurrentCommitOid = do
   headPath <- getHEADFilePath
@@ -92,7 +175,7 @@ getCurrentCommitOid = do
         else return $ Just oidStr
     else return Nothing -- No parent commit
 
--- | Updates the HEAD reference to point to the new commit
+-- | Update the HEAD reference to point to the new commit
 updateHEAD :: String -> IO ()
 updateHEAD commitOid = do
   headPath <- getHEADFilePath
