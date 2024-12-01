@@ -2,6 +2,7 @@
 
 module CommitTests
   ( commitTests,
+    testCommitObjectStructure,
   )
 where
 
@@ -23,12 +24,13 @@ import Commit
 import Control.Monad (forM_, when)
 import Data.ByteString.Char8 qualified as BS8
 import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import System.FilePath ((</>), splitDirectories, takeDirectory, takeFileName)
-import Test.HUnit
+import Data.Map.Strict qualified as Map
 import Index (readIndexFile)
-import Utils
+import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
+import Test.HUnit
 import TestUtils
+import Utils
+
 -- | Asserts that a commit command fails with a CommandError
 assertCommitFailure :: [(String, Maybe String)] -> [String] -> IO ()
 assertCommitFailure flags args = do
@@ -123,17 +125,24 @@ testCommitNoChanges = TestCase $ withTestRepo $ \testDir -> do
           ("file2.txt", "Initial commit file")
         ]
   createFiles files
+
+  -- Add files to index
   runAddCommand [] ["file1.txt", "file2.txt"]
+
+  -- Commit with message
   runCommitCommand [("message", Just "Initial commit")] []
+
+  -- Get first commit OID
+  firstCommitOid <- getHeadCommitOid testDir
 
   -- Attempt to commit again without changes
   runCommitCommand [("message", Just "No changes commit")] []
 
-  -- Get current commit OID
-  headOid <- getHeadCommitOid testDir
+  -- Get second commit OID
+  secondCommitOid <- getHeadCommitOid testDir
 
-  -- Verify commit
-  verifyCommit testDir headOid (Just headOid) "No changes commit"
+  -- Verify second commit
+  verifyCommit testDir secondCommitOid (Just firstCommitOid) "No changes commit"
 
 -- | Test committing with additional files after initial commit
 testCommitWithAdditionalFiles :: Test
@@ -198,7 +207,6 @@ testCommitSequence = TestCase $ withTestRepo $ \testDir -> do
   -- Verify third commit
   verifyCommit testDir headOid3 (Just headOid2) "Third commit"
 
--- | Test committing object structure with subtrees
 testCommitObjectStructure :: Test
 testCommitObjectStructure = TestCase $ withTestRepo $ \testDir -> do
   -- Create and add files

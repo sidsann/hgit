@@ -3,22 +3,21 @@
 module Commit where
 
 import CommandParser (CommandError (..))
-import Control.Monad (unless, when)
+import Control.Monad (unless, when, forM_)
 import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
+import Data.List (isPrefixOf, sort)
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Index (readIndexFile)
 import System.Directory (doesFileExist)
 import System.FilePath
-  ( (</>),
+  ( splitDirectories,
     takeDirectory,
     takeFileName,
-    splitDirectories
+    (</>),
   )
-import qualified Data.ByteString.Char8 as BS8
-import Data.List (sort, isPrefixOf)
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
 import Utils
 
 -- | Data structure representing a Commit
@@ -60,14 +59,17 @@ parseCommitContent content = do
   -- Assume commit message is the last line after a blank line
   let messageVal = case dropWhile (/= BS.empty) (BS8.lines content) of
         [] -> Nothing
-        (_ : msgLines) -> Just $ BS8.unpack $ BS8.unlines msgLines
+        (_ : msgLines) -> Just $ BS8.unpack $ BS8.intercalate (BS8.pack "\n") msgLines
   case (treeOidVal, messageVal) of
-    (Just treeOid, Just message) -> return $ Right Commit
-      { treeOid = treeOid,
-        parentOid = parentOidVal,
-        timestamp = fromMaybe "" timestampVal,
-        message = message
-      }
+    (Just treeOid, Just message) ->
+      return $
+        Right
+          Commit
+            { treeOid = treeOid,
+              parentOid = parentOidVal,
+              timestamp = fromMaybe "" timestampVal,
+              message = message
+            }
     _ -> return $ Left "Invalid commit object format."
 
 -- | Deserialize a tree object from its OID
@@ -92,11 +94,11 @@ parseTreeEntry line =
   let (typeBS, rest1) = BS8.break (== ' ') line
       (oidBS, rest2) = BS8.break (== ' ') (BS8.drop 1 rest1)
       nameBS = BS8.drop 1 rest2
-  in (BS8.unpack typeBS, BS8.unpack oidBS, BS8.unpack nameBS)
+   in (BS8.unpack typeBS, BS8.unpack oidBS, BS8.unpack nameBS)
 
 -- | Build tree OID from index
 buildTree :: Map FilePath String -> IO String
-buildTree = buildTreeRecursive ""
+buildTree = buildTreeRecursive "."
 
 buildTreeRecursive :: FilePath -> Map FilePath String -> IO String
 buildTreeRecursive dirPath indexMap = do
@@ -109,6 +111,7 @@ buildTreeRecursive dirPath indexMap = do
 
   -- Process subtrees
   let subDirs = collectSubDirs entriesInSubDirs
+
   subTreeOids <- Map.traverseWithKey (\subDir _ -> buildTreeRecursive subDir indexMap) subDirs
 
   -- Build tree entries
@@ -120,22 +123,26 @@ buildTreeRecursive dirPath indexMap = do
   -- Create tree object and return its OID
   createObject treeContent
 
--- | Collect unique subdirectories
+-- | Collect unique subdirectories, excluding the current directory
 collectSubDirs :: Map FilePath a -> Map FilePath ()
-collectSubDirs = Map.fromList . map (\k -> (takeDirectory k, ())) . Map.keys
+collectSubDirs = Map.fromList
+             . map (\k -> (takeDirectory k, ()))
+             . filter (\k -> takeDirectory k /= ".")
+             . Map.keys
 
 -- | Create a tree entry
 buildTreeEntry :: String -> String -> String -> BS.ByteString
 buildTreeEntry objType oid name =
   let entryLine = objType ++ " " ++ oid ++ " " ++ name ++ "\n"
-  in BS8.pack entryLine
+   in BS8.pack entryLine
 
 -- | Check if a path is a subdirectory of another
 isSubdirectory :: FilePath -> FilePath -> Bool
-isSubdirectory dir path =
-  let dirComponents = splitPathComponents dir
-      pathComponents = splitPathComponents (takeDirectory path)
-  in dirComponents `isPrefixOf` pathComponents && dirComponents /= pathComponents
+isSubdirectory dirPath path =
+  let dirComponents = if dirPath == "." then [] else splitPathComponents dirPath
+      pathDir = takeDirectory path
+      pathComponents = if pathDir == "." then [] else splitPathComponents pathDir
+   in dirComponents `isPrefixOf` pathComponents && dirComponents /= pathComponents
 
 -- | Split a path into components
 splitPathComponents :: FilePath -> [FilePath]
@@ -146,18 +153,23 @@ createCommitContent :: String -> Maybe String -> String -> String -> BS.ByteStri
 createCommitContent treeOid parentOid timestamp commitMsg =
   let parentLine = maybe "" (\oid -> "parent " ++ oid ++ "\n") parentOid
       content =
-        "tree " ++ treeOid ++ "\n" ++
-        parentLine ++
-        "timestamp " ++ timestamp ++ " +0000\n" ++
-        commitMsg ++ "\n"
-  in BS8.pack content
+        "tree "
+          ++ treeOid
+          ++ "\n"
+          ++ parentLine
+          ++ "timestamp "
+          ++ timestamp
+          ++ " +0000\n"
+          ++ "\n"
+          ++ commitMsg
+   in BS8.pack content
 
 -- | Get the current commit OID from HEAD
 getCurrentCommitOid :: IO (Maybe String)
 getCurrentCommitOid = do
   headPath <- getHEADFilePath
   ref <- BS.readFile headPath
-  let refPath = BS8.unpack ref -- e.g., "refs/heads/main"
+  let refPath = BS8.unpack $ BS8.strip ref -- e.g., "refs/heads/main"
   refFullPath <- fmap (</> refPath) getHgitPath
   exists <- doesFileExist refFullPath
   if exists
