@@ -1,7 +1,7 @@
 import AddTests (addTests)
 import CommitTests (commitTests)
 import InitTests (initTests)
-import HashTests (hashTests)
+import UtilTests (utilTests)
 import ParserTests (parserTests, prop_parseInput_correct)
 import Test.HUnit
 import Test.QuickCheck
@@ -14,7 +14,7 @@ main = do
     runTestTT $
       TestList
         [ parserTests,
-          hashTests,
+          utilTests,
           initTests,
           addTests,
           commitTests

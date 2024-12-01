@@ -3,61 +3,9 @@
 ## TL;DR 
 A lightweight, pure Haskell library implementing core Git functionality for local-only repositories.
 
-## Module organization
-
-Haskell packages typically divide their source code into three separate places:
-
-  - The bulk of your code should be developed as a reusable library in 
-    modules in the `src` directory. We've created [Lib.hs](src/Lib.hs) 
-    for you to get started. You can add additional modules here.
-    If you do add new modules to this directory you should list them
-    in the cabal file: `project-cis5520.cabal`.
-  
-  - The entry point for your executable is in [Main.hs](app/Main.hs). 
-  
-  - All of your test cases should be in [the test directory](test/Spec.hs).
-
-## Building, running, and testing
-
-This project compiles with `stack build`. 
-You can run the main executable with `stack run`.
-You can run the tests with `stack test`. 
-
-Finally, you can start a REPL with `stack ghci`.
-
-## Importing additional libraries
-
-This project is designed to run with stackage: you can easily use any library
-in https://www.stackage.org/lts-22.32 by adding an entry to the
-`build-depends` list of the `common-stanza` in the cabal file. If you want to
-use a library that is not on stackage, you'll need to update the common-stanza
-*and* add information to `stack.yaml` about where to find that library.
-
 ## High-level Overview
 
-Git supports a number of commands, easily over a 100, of these, less than half are considered porcelain commands, high-level commands which most Git users are likely to be familiar with. The rest are known as plumbing commands and represent low-level operations which are most often used for scripting. For our project, we will implement a subset of the porcelain commands:
-
-- First block of commands to support:
-  - hgit init
-  - hgit add
-  - hgit branch
-  - hgit checkout
-  - hgit commit
-  - hgit log
-  - hgit status: simplest implementation will just compare hashes (object ID; OID) for tracked files, if different, then it has been modified
-  - hgit switch
-- Second block of commands to support:
-  - hgit merge (highest priority after finishing first block)
-  - hgit rebase
-  - hgit clean
-  - hgit diff (diffs are calculated dynamically, when requested, so not necessary for core functionality)
-    - hgit rebase (uses diffs to reconstruct branch by replaying diffs from another branch onto the current branch creating a simpler git history)
-    - hgit cherry-pick (uses diffs to replay changes from a range of commits onto current head, very similar functionality to rebase, just more fine-grained)
-    - hgit range-diff
-  - hgit reset, hgit revert, hgit restore
-  - hgit rm
-  - hgit mv
-  - hgit help
+Git supports a number of commands, easily over a 100, of these, less than half are considered porcelain commands, high-level commands which most Git users are likely to be familiar with. The rest are known as plumbing commands and represent low-level operations which are most often used for scripting. For our project, we will implement a subset of the porcelain commands.
 
 ## Object Model & Workflow
 
@@ -74,7 +22,6 @@ This directory will eventually also contain a file titled _index_ which will con
 __All of our implemented commands will rely on this object model, and they will not use any additional type of file or formatting to achieve our desired functionality.__ 
 
 ## Detailed Command Definitions incl. flags, args, etc.
-**First block of commands to implement:**
   - hgit init: Will create the .hgit directory in the directory from where this command is given with an empty HEAD file, an empty objects directory, refs directory will just contain heads directory which will just contain an empty file called main (for main branch)
   - hgit add _______: Will update the index file with the added files, this will involve hashing the added file, seeing if it is already tracked and comparing the hashes, if same, then nothing more to do, if different, then update the hash and write to the objects directory with this file's contents (we're going to ignore optimizing here, we can later check to see if the existing hash is pointed to by any commit, if not we can delete it, maybe using a garbage collection thread which routinely checks for such blobs that are no longer connected to any commit or index)
     - Versions to support: 
@@ -100,63 +47,10 @@ __All of our implemented commands will rely on this object model, and they will 
     - Changes to be committed: includes new files, modified files, deleted files
     - Changes not staged for commit: includes modified and deleted files (same file can be in changes to be committed and this section if you staged it and then made changes or deleted it)
     - Untracked files: files that haven't been staged, which includes new files, also ignored files if we ever implement .gitignore type functionality
-
-**Second block of commands to implement:**
-  - hgit merge: 
-  - hgit rebase:
   - hgit clean
-  - hgit diff (diffs are calculated dynamically, when requested, so not necessary for core functionality)
-    - hgit rebase (uses diffs to reconstruct branch by replaying diffs from another branch onto the current branch creating a simpler git history)
-    - hgit cherry-pick (uses diffs to replay changes from a range of commits onto current head, very similar functionality to rebase, just more fine-grained)
-    - hgit range-diff
   - hgit reset
   - hgit revert
   - hgit restore
   - hgit rm
   - hgit mv
   - hgit help
-  - hgit config user.name "name" and hgit config user.email "email"
-
-## Modules and Type-Definitions in Haskell to support Object Model and General Implementation
-- CommandParser.hs to parse inputs from user, return which command was input
-- Main.hs for getting input from the user and calling functions to parse the input and call the appropriate function/s to actually implement a given command
-- Index.hs: Read/write/update Index file
-- Refs.hs: Read/write refs directory as needed 
-- Object.hs: Objects are either Blobs, Trees, or Commits. Data types for each are defined here as well as methodologies for serializing and deserializing files corresponding to each type
-- Branch.hs: Branch functionality including listing, creating, deleting, and renaming branches
-- Commit.hs: Commit functionality incl. creating a new commit, amending the previous commit
-- Tree.hs: Tree functionality including traversal
-- Hash.hs: Functionality related to hashing files, comparing hashes, etc.
-- FileIO.hs: Functionality related to reading and writing to a file
-- Head.hs for all functionality related to modifying the Head ptr
-- Config.hs for functionality tied to modifying the config file
-
-
-## Project Testing
-
-Refer to [How to Specify It\!](https://research.chalmers.se/publication/517894/file/517894_Fulltext.pdf) for further details on the following testing methodologies. Each testing methodology is also defined within this specification using text taken verbatim from the aforementioned document.
-
-### Validity Testing
-
-Validity testing consists of defining a function to check the invariants of your data types, writing properties to test that your generators and shrinkers only produce valid results, and writing a property for each function under test that performs a single random call, and checks that the return value is valid.
-
-- Test Idea
-- Test Idea 2
-- Etc.
-
-### Postcondition Testing
-
-A postcondition tests a single function, calling it with random arguments, and checking an expected relationship between its arguments and its result.
-
-### Metamorphic Testing
-
-A metamorphic property tests a single function by making (usually) two related calls, and checking the expected relationship between the two results.\*
-
-### Inductive Testing
-
-Inductive properties relate a call of the function-under-test to calls with smaller arguments. A set of inductive properties covering all possible cases together test the base case(s) and induction step(s) of an inductive proof-of-correctness. If all the properties hold, then we know the function is correct–inductive properties together make up a complete test.
-
-### Model-based Testing
-
-A model-based property tests a single function by making a single call, and comparing its result to the result of a related “abstract operation” applied to related abstract arguments. An abstraction functions maps the real, concrete arguments and results to abstract values, which we also call the “model”.
-

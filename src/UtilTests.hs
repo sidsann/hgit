@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module HashTests
-  ( hashTests,
+module UtilTests
+  ( utilTests,
   )
 where
 import Utils
@@ -14,8 +14,8 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.Text qualified as T
 import Test.HUnit ( assertEqual, Test(..) )
 
-testHashModuleFunctions :: Test
-testHashModuleFunctions =
+utilTests :: Test
+utilTests =
   TestList
     [ TestCase $
         let originalText = "Symmetric compression and decompression" :: T.Text
@@ -45,8 +45,3 @@ testHashModuleFunctions =
             actual = sha1Hash input
          in assertEqual "SHA-1 hash of pangram" expected actual
     ]
-
-hashTests :: Test
-hashTests =
-  TestLabel "Hash Module Tests" $
-    TestList [TestLabel "Hash Module Functions" testHashModuleFunctions]
