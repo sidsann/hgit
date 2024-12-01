@@ -4,6 +4,7 @@ import Data.List (find, isPrefixOf)
 import qualified Data.Set as Set
 import Data.Maybe (maybeToList)
 import Data.Char (isSpace)
+import Utils
 
 data Command = Command
   { subcommand :: String,
@@ -13,6 +14,7 @@ data Command = Command
   }
 
 instance Eq Command where
+  (==) :: Command -> Command -> Bool
   (Command sc1 desc1 flags1 _) == (Command sc2 desc2 flags2 _) =
     sc1 == sc2 && desc1 == desc2 && flags1 == flags2
 

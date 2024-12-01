@@ -6,13 +6,6 @@ import CommandParser (CommandError (..))
 import Control.Monad (unless, when)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
-import FileIO
-  ( getHgitPath,
-    getHEADFilePath,
-    createObject,
-    getObjectsPath, readAndDecompressObject
-  )
-import Hash (stringToByteString, decompress)
 import Index (readIndexFile)
 import System.Directory (doesFileExist)
 import System.FilePath
@@ -26,6 +19,7 @@ import Data.List (sort, isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import Utils
 
 -- | Data structure representing a Commit
 data Commit = Commit

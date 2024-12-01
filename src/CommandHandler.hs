@@ -9,20 +9,19 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified (pack)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import FileIO
-  ( createDirectoryIfMissing',
-    createFileIfMissing,
-    doesDirectoryExist,
-    getHEADFilePath,
-    getHeadPath,
-    getHeadsPath,
-    getHgitPath,
-    getObjectsPath,
-    writeFileFromByteString,
-    createObject
-  )
-import Hash (stringToByteString)
 import Index (readIndexFile, updateIndex, writeIndexFile)
+import Utils
+    ( doesDirectoryExist,
+      createObject,
+      writeFileFromByteString,
+      createDirectoryIfMissing',
+      createFileIfMissing,
+      getHgitPath,
+      getHeadsPath,
+      getObjectsPath,
+      getHeadPath,
+      getHEADFilePath,
+      stringToByteString )
 
 commands :: [Command]
 commands =

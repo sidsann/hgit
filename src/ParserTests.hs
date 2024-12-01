@@ -1,61 +1,25 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Parser where
+module ParserTests
+  ( parserTests,
+    prop_parseInput_correct
+  )
+where
 
-import CommandHandler
 import CommandParser
   ( Command (Command, flags, subcommand),
-    CommandError (..),
     Flag (..),
     FlagType (..),
-    ParsedCommand
-      ( ParsedCommand,
-        parsedArguments,
-        parsedFlags,
-        parsedSubcommand
-      ),
+    ParsedCommand (..),
+    CommandError (..),
     defaultValidate,
     parseCommand,
     parseFlagsAndArgs,
     parseInput,
   )
-import Control.Monad (forM_, when)
-import Data.Bifunctor qualified
-import Data.ByteString qualified as BS
-import Data.ByteString.Char8 qualified as BS8
-import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe, maybeToList)
-import Data.Set qualified as Set
-import Data.Text qualified as T
-import FileIO
-  ( createDirectoryIfMissing',
-    createFileIfMissing,
-    doesDirectoryExist,
-    getHEADFilePath,
-    getHeadPath,
-    getHeadsPath,
-    getHgitPath,
-    getIndexFilePath,
-    getObjectsPath,
-    getRefsPath,
-  )
-import Hash (byteStringToText, compress, decompress, sha1Hash, textToByteString)
-import Index (readIndexFile)
-import System.Directory
-  ( createDirectoryIfMissing,
-    doesDirectoryExist,
-    doesFileExist,
-    getCurrentDirectory,
-    removeDirectoryRecursive,
-    removePathForcibly,
-    setCurrentDirectory,
-  )
-import System.FilePath (normalise, takeDirectory, (</>))
 import Test.HUnit
 import Test.QuickCheck
   ( Arbitrary (arbitrary),
-    Args (maxSuccess),
-    Gen,
     Property,
     Testable,
     chooseInt,
@@ -67,40 +31,28 @@ import Test.QuickCheck
     quickCheck,
     quickCheckWith,
     stdArgs,
-    vectorOf,
-    (==>),
+    (==>), Gen,
   )
-import Test.QuickCheck.Property qualified
+import Control.Monad (when)
+import Data.Bifunctor qualified
+import Data.Maybe (mapMaybe)
+import Data.Text qualified as T
+import Data.Text.Encoding.Error (UnicodeException)
+import System.FilePath (takeDirectory, (</>))
+import Data.Set qualified as Set
+import TestUtils
 
-parseTests = TestList [testParseCommand,
-             testParseFlagsAndArgs,
-             testParseInput]
+-- Parsing-related Tests
 
-
-
-letFlagsAdd :: [Flag]
-letFlagsAdd =
-  [ Flag "update" (Just "u") NoArg
-  ]
-
-letFlagsInit :: [Flag]
-letFlagsInit = []
-
-letCommands :: [Command]
-letCommands =
-  [ Command "add" "Add files to the index" letFlagsAdd testValidate,
-    Command "init" "Initialize a new repository" letFlagsInit testValidate
-  ]
-
-  testParseCommand :: Test
+testParseCommand :: Test
 testParseCommand =
   TestList
     [ "Valid Command 'add'"
         ~: parseCommand letCommands ["add"]
-        ~?= Right (head letCommands, []),
+        ~?= Right (letCommands !! 1, []),
       "Valid Command 'init'"
         ~: parseCommand letCommands ["init"]
-        ~?= Right (letCommands !! 1, []),
+        ~?= Right (head letCommands, []),
       "Invalid Command"
         ~: parseCommand letCommands ["status"]
         ~?= Left (CommandError "Unknown command: status")
@@ -110,16 +62,16 @@ testParseFlagsAndArgs :: Test
 testParseFlagsAndArgs =
   TestList
     [ "Parse no-arg flag (--update)"
-        ~: parseFlagsAndArgs letFlagsAdd ["--update"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["--update"]
         ~?= Right ([("update", Nothing)], []),
       "Parse short flag (-u)"
-        ~: parseFlagsAndArgs letFlagsAdd ["-u"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["-u"]
         ~?= Right ([("update", Nothing)], []),
       "Parse arguments"
-        ~: parseFlagsAndArgs letFlagsAdd ["file1.txt", "file2.txt"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["file1.txt", "file2.txt"]
         ~?= Right ([], ["file1.txt", "file2.txt"]),
       "Parse flags and arguments"
-        ~: parseFlagsAndArgs letFlagsAdd ["--update", "file1.txt"]
+        ~: parseFlagsAndArgs (flags $ letCommands !! 1) ["--update", "file1.txt"]
         ~?= Right ([("update", Nothing)], ["file1.txt"])
     ]
 
@@ -128,18 +80,12 @@ testParseInput =
   TestList
     [ "Parse 'add' with no flags or args"
         ~: parseInput letCommands "add"
-        ~?= Right
-          ( ParsedCommand
-              { parsedSubcommand = head letCommands,
-                parsedFlags = [],
-                parsedArguments = []
-              }
-          ),
+        ~?= Left (CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"),
       "Parse 'add' with --update flag"
         ~: parseInput letCommands "add --update"
         ~?= Right
           ( ParsedCommand
-              { parsedSubcommand = head letCommands,
+              { parsedSubcommand = letCommands !! 1,
                 parsedFlags = [("update", Nothing)],
                 parsedArguments = []
               }
@@ -148,38 +94,26 @@ testParseInput =
         ~: parseInput letCommands "add file1.txt file2.txt"
         ~?= Right
           ( ParsedCommand
-              { parsedSubcommand = head letCommands,
+              { parsedSubcommand = letCommands !! 1,
                 parsedFlags = [],
                 parsedArguments = ["file1.txt", "file2.txt"]
               }
           ),
       "Parse 'add' with flags and files"
         ~: parseInput letCommands "add -u file1.txt"
-        ~?= Right
-          ( ParsedCommand
-              { parsedSubcommand = head letCommands,
-                parsedFlags = [("update", Nothing)],
-                parsedArguments = ["file1.txt"]
-              }
-          ),
+        ~?= Left (CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"),
       "Parse 'init' with no flags or args"
         ~: parseInput letCommands "init"
         ~?= Right
           ( ParsedCommand
-              { parsedSubcommand = letCommands !! 1,
+              { parsedSubcommand = head letCommands,
                 parsedFlags = [],
                 parsedArguments = []
               }
           ),
       "Parse 'init' with unexpected args"
         ~: parseInput letCommands "init extra"
-        ~?= Right
-          ( ParsedCommand
-              { parsedSubcommand = letCommands !! 1,
-                parsedFlags = [],
-                parsedArguments = ["extra"]
-              }
-          )
+        ~?= Left (CommandError "This command does not accept any flags or arguments.")
     ]
 
 -- | Validation function to ensure no flag conflicts
@@ -268,3 +202,13 @@ generateUniqueFlags n = go n [] []
               let newUsedShortNames = maybe usedShortNames (: usedShortNames) mShort
               rest <- go (count - 1) newUsedLongNames newUsedShortNames
               return $ Flag long mShort flagType : rest
+
+-- | Collection of all parser tests
+parserTests :: Test
+parserTests =
+  TestLabel "Parser Tests" $
+    TestList
+      [ TestLabel "Parse Command" testParseCommand,
+        TestLabel "Parse Flags and Args" testParseFlagsAndArgs,
+        TestLabel "Parse Input" testParseInput
+      ]
