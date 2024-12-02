@@ -225,7 +225,7 @@ testCommitObjectStructure = TestCase $ withTestRepo $ \testDir -> do
   createFiles files
 
   -- Add all files
-  runAddCommand [] ["file1.txt", "file2.txt", "src/main.hs", "src/utils/helpers.hs"]
+  runAddCommand [] ["file1.txt", "file2.txt", "src"]
 
   -- Commit with message
   runCommitCommand [("message", Just "Initial commit with src")] []
