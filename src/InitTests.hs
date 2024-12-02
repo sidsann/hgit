@@ -20,9 +20,9 @@ import System.Directory
     setCurrentDirectory,
   )
 import System.FilePath ((</>))
-import Test.HUnit
-import CommandHandler
-import TestUtils
+import Test.HUnit ( assertBool, assertFailure, Test(..) )
+import CommandHandler ( commandHandler )
+import TestUtils()
 import Utils (createDirectoryIfMissing')
 
 -- | Ensure the `git init` command creates the expected structure.

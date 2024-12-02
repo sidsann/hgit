@@ -3,7 +3,7 @@ import CommitTests (commitTests)
 import InitTests (initTests)
 import UtilTests (utilTests)
 import ParserTests (parserTests, prop_parseInput_correct)
-import Test.HUnit
+import Test.HUnit ( runTestTT, Test(TestList) )
 import Test.QuickCheck
     ( quickCheckWith, stdArgs, Testable, Args(maxSuccess) )
 import BranchTests (branchTests)

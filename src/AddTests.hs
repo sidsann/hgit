@@ -6,6 +6,9 @@ module AddTests
 where
 
 import CommandParser
+    ( CommandError(CommandError),
+      ParsedCommand(ParsedCommand, parsedArguments, parsedSubcommand,
+                    parsedFlags) )
 import Commit (buildTree)
 import Control.Monad (forM_, when)
 import Data.ByteString.Char8 qualified as BS8
@@ -22,8 +25,15 @@ import Test.HUnit
     assertEqual,
     assertFailure,
   )
-import Utils
+import Utils ( sha1Hash )
 import TestUtils
+    ( letCommands,
+      createFiles,
+      runCommand,
+      runAddCommand,
+      verifyIndex,
+      verifyBlobExists,
+      withTestRepo )
 
 -- | Test adding a single file
 testAddSingleFile :: Test

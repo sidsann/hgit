@@ -19,6 +19,11 @@ import System.FilePath
     (</>),
   )
 import Utils
+    ( createObject,
+      readAndDecompressObject,
+      getHgitPath,
+      getHEADFilePath,
+      stringToByteString )
 
 -- | Data structure representing a Commit
 data Commit = Commit

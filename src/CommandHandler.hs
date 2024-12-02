@@ -22,7 +22,7 @@ import Utils
       getHeadPath,
       getHEADFilePath,
       stringToByteString )
-import Branch
+import Branch ( listBranches, createBranch, deleteBranch )
 
 commands :: [Command]
 commands =

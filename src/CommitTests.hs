@@ -5,7 +5,7 @@ module CommitTests
   )
 where
 
-import CommandHandler
+import CommandHandler ()
 import CommandParser
   ( Command (..),
     CommandError (..),
@@ -26,8 +26,15 @@ import Data.Map.Strict qualified as Map
 import Index (readIndexFile)
 import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
 import Test.HUnit
+    ( assertBool, assertEqual, assertFailure, Test(..) )
 import TestUtils
-import Utils
+    ( letCommands,
+      createFiles,
+      runCommand,
+      runAddCommand,
+      runCommitCommand,
+      withTestRepo )
+import Utils ( getHeadCommitOid )
 import System.Directory (removeFile, removeDirectoryRecursive)
 
 -- | Asserts that a commit command fails with a CommandError

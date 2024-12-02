@@ -1,6 +1,3 @@
--- \* Entry point for a Haskell application
--- Typically, this file is short and most code is part of a reusable library
-
 module Main where
 
 import CommandHandler (commandHandler, commands)
@@ -9,11 +6,11 @@ import Control.Monad (unless)
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (except)
-
+import System.Environment (getArgs)
 
 main :: IO ()
 main = do
-  input <- getLine
+  input <- getArgs
   result <- runExceptT $ do
     -- Parse the input
     cmd <- except $ parseInput commands input

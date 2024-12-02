@@ -65,7 +65,7 @@ library
   hs-source-dirs:
       src
 
-executable hgit-exe
+executable hgit
   import:
       common-stanza
   main-is: 

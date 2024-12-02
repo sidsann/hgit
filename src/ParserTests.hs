@@ -17,7 +17,7 @@ import CommandParser
     parseFlagsAndArgs,
     parseInput,
   )
-import Test.HUnit
+import Test.HUnit ( (~:), (~?=), Test(TestLabel, TestList) )
 import Test.QuickCheck
   ( Arbitrary (arbitrary),
     Property,
@@ -40,7 +40,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding.Error (UnicodeException)
 import System.FilePath (takeDirectory, (</>))
 import Data.Set qualified as Set
-import TestUtils
+import TestUtils ( testValidate, letCommands )
 
 -- Parsing-related Tests
 
@@ -79,10 +79,10 @@ testParseInput :: Test
 testParseInput =
   TestList
     [ "Parse 'add' with no flags or args"
-        ~: parseInput letCommands "add"
+        ~: parseInput letCommands ["add"]
         ~?= Left (CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"),
       "Parse 'add' with --update flag"
-        ~: parseInput letCommands "add --update"
+        ~: parseInput letCommands ["add", "--update"]
         ~?= Right
           ( ParsedCommand
               { parsedSubcommand = letCommands !! 1,
@@ -91,7 +91,7 @@ testParseInput =
               }
           ),
       "Parse 'add' with files"
-        ~: parseInput letCommands "add file1.txt file2.txt"
+        ~: parseInput letCommands ["add", "file1.txt", "file2.txt"]
         ~?= Right
           ( ParsedCommand
               { parsedSubcommand = letCommands !! 1,
@@ -100,10 +100,10 @@ testParseInput =
               }
           ),
       "Parse 'add' with flags and files"
-        ~: parseInput letCommands "add -u file1.txt"
+        ~: parseInput letCommands ["add", "-u", "file1.txt"]
         ~?= Left (CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"),
       "Parse 'init' with no flags or args"
-        ~: parseInput letCommands "init"
+        ~: parseInput letCommands ["init"]
         ~?= Right
           ( ParsedCommand
               { parsedSubcommand = head letCommands,
@@ -112,7 +112,7 @@ testParseInput =
               }
           ),
       "Parse 'init' with unexpected args"
-        ~: parseInput letCommands "init extra"
+        ~: parseInput letCommands ["init", "extra"]
         ~?= Left (CommandError "This command does not accept any flags or arguments.")
     ]
 
@@ -133,7 +133,7 @@ prop_parseInput_correct :: Property
 prop_parseInput_correct = forAll arbitrary $ \cmd ->
   validateCommand cmd ==>
     let flagsWithValues = map assignFlagValue (flags cmd)
-        inputString = constructInputString cmd flagsWithValues []
+        inputArgs = constructInputArgs cmd flagsWithValues []
         expectedParsedFlags = map (Data.Bifunctor.first longName) flagsWithValues
         expectedParsedCommand =
           ParsedCommand
@@ -141,7 +141,7 @@ prop_parseInput_correct = forAll arbitrary $ \cmd ->
               parsedFlags = expectedParsedFlags,
               parsedArguments = []
             }
-     in case parseInput [cmd] inputString of
+     in case parseInput [cmd] inputArgs of
           Right parsedCmd -> parsedCmd == expectedParsedCommand
           Left err -> error $ "Parser failed with error: " ++ show err
   where
@@ -150,17 +150,17 @@ prop_parseInput_correct = forAll arbitrary $ \cmd ->
       RequiresArg -> (flag, Just "value")
       NoArg -> (flag, Nothing)
 
-constructInputString :: Command -> [(Flag, Maybe String)] -> [String] -> String
-constructInputString cmd flagValues argsList =
-  unwords $ [subcommand cmd] ++ flagStrings ++ argsList
+constructInputArgs :: Command -> [(Flag, Maybe String)] -> [String] -> [String]
+constructInputArgs cmd flagValues argsList =
+  [subcommand cmd] ++ flagStrings ++ argsList
   where
-    flagStrings = concatMap flagToString flagValues
-    flagToString (flag, mValue) =
+    flagStrings = concatMap flagToArg flagValues
+    flagToArg (flag, mValue) =
       let flagName = case shortName flag of
             Just sName -> "-" ++ sName
             Nothing -> "--" ++ longName flag
        in case (flagType flag, mValue) of
-            (RequiresArg, Just val) -> [flagName, "\"" ++ val ++ "\""]
+            (RequiresArg, Just val) -> [flagName, val]
             (NoArg, _) -> [flagName]
             _ -> []
 

@@ -5,7 +5,7 @@ module BranchTests
   )
 where
 
-import CommandHandler
+import CommandHandler ()
 import CommandParser
   ( Command (..),
     CommandError (..),
@@ -21,9 +21,15 @@ import Data.Map.Strict qualified as Map
 import Index (readIndexFile)
 import System.Directory (listDirectory, removeDirectoryRecursive, removeFile)
 import System.FilePath (takeFileName, (</>))
-import Test.HUnit
+import Test.HUnit ( assertEqual, assertFailure, Test(..) )
 import TestUtils
-import Utils
+    ( letCommands,
+      createFiles,
+      runCommand,
+      runAddCommand,
+      runCommitCommand,
+      withTestRepo )
+import Utils ( readFileAsByteString )
 
 -- | Asserts that a branch command fails with a CommandError
 assertBranchFailure :: [(String, Maybe String)] -> [String] -> IO ()

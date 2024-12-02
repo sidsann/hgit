@@ -36,8 +36,14 @@ import System.FilePath
     (</>)
   )
 import Data.List (isPrefixOf, (\\)) -- Correctly import the list difference operator
-import CommandParser
+import CommandParser ( CommandError(..) )
 import Utils
+    ( doesDirectoryExist,
+      createObject,
+      getIndexFilePath,
+      sha1Hash,
+      stringToByteString,
+      byteStringToString )
 
 -- Type alias for the index mapping
 type IndexMap = Map FilePath String -- Map from file path to OID
