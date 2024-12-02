@@ -34,14 +34,9 @@ __All of our implemented commands will rely on this object model, and they will 
   - hgit branch: List, create, or delete branches
     - Versions to support:
       - hgit branch : list all branches with an asterisk to denote the current branch (Head pointer will contain this info)
-      - hgit branch -m "newname" : update head pointer to have updated file path for new branch name for the same branch and also update the actual refs/heads/oldname to refs/heads/newname, and the content will be same since same commit object
       - hgit branch "branchname": creates a new branch that points to the commit pointed to by the file pointed to by Head ptr
-      - hgit branch -d "branchname" : (EXTRA FOR AFTER TESTING) deletes the branch specified, and this would have to be a branch that the user is not currently on. Would involve just deleting the file corresponding to that branch in refs/heads. (Optimization might be rather involved here since many objects could become unreachable at this point)
-  - hgit checkout: Importantly, it does the same thing as git switch since **we will not support detached head state**. Also overlap with git branch since we can create a branch here too
-    - Versions to support: 
-      - hgit checkout "branchname": switch to an existing branch, so change HEAD ptr to appropriate file path, and update index file to all tracked files of last commit of that branch, and if you have staged data that hasn't been committed, then you will be prompted to commit the data before checking out the other branch. Then the files in the working directory will also be updated to match the new branch.
-      - hgit checkout -b "new-branch-name" : creates a new branch like hgit branch "branchname", but also switches to it, which requires the same steps as the previous checkout command
-  - hgit switch: same functionality as hgit checkout via hgit switch "existing branchname" and hgit switch -c "new branchname"
+      - hgit branch -d "branchname" : deletes the branch specified, and this would have to be a branch that the user is not currently on. Would involve just deleting the file corresponding to that branch in refs/heads
+  - hgit switch: same functionality as hgit checkout via hgit switch "existing branchname"
   - hgit log: in reverse chronological order, give commit hash, current branch pointed to by Head, and then for each commit (assume only one parent for now since we will be implementing merge second block) list author name and email, timestamp of commit, and the commit message. When we do implement merge this will involve just picking the one parent, the branch into which the merge was made.
   - hgit status: Says what branch you're on and has 3 sections:
     - Changes to be committed: includes new files, modified files, deleted files

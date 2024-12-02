@@ -22,6 +22,7 @@ import Utils
       getHeadPath,
       getHEADFilePath,
       stringToByteString )
+import Branch
 
 commands :: [Command]
 commands =
@@ -48,26 +49,20 @@ commands =
         flags =
           [Flag {longName = "message", shortName = Just "m", flagType = RequiresArg}],
         validate = validateCommitCommand
+      },
+    Command
+      { subcommand = "branch",
+        description =
+          "List, create, or delete branches.\n\
+          \Usage:\n\
+          \  hgit branch                List all branches\n\
+          \  hgit branch <branchname>   Create a new branch\n\
+          \  hgit branch -d <branchname> Delete an existing branch",
+        flags =
+          [ Flag { longName = "delete", shortName = Just "d", flagType = RequiresArg }
+          ],
+        validate = validateBranchCommand
       }
-      -- , Command
-      --     { subcommand = "branch",
-      --       description =
-      --         "Lists, creates, renames, or deletes branches.",
-      --       flags =
-      --         [ Flag { longName = "move", shortName = Just "m", flagType = Required },
-      --           Flag { longName = "delete", shortName = Just "d", flagType = Required }
-      --         ],
-      --       args = [ "branchname" ]
-      --     }
-      -- , Command
-      --     { subcommand = "checkout",
-      --       description =
-      --         "Switches to an existing branch or creates and switches to a new branch.",
-      --       flags =
-      --         [ Flag { longName = "branch", shortName = Just "b", flagType = Required }
-      --         ],
-      --       args = [ "branchname" ]
-      --     }
       -- , Command
       --     { subcommand = "switch",
       --       description =
@@ -167,6 +162,8 @@ commandHandler parsedCmd = do
     "init" -> handleInit
     "add" -> handleAdd flags args
     "commit" -> handleCommit flags args
+    "branch" -> handleBranch flags args
+
     -- Add other command handlers here
     _ -> throwIO $ userError $ "Unknown subcommand: " ++ cmdStr
 
@@ -174,6 +171,7 @@ commandHandler parsedCmd = do
   case result of
     Left (ex :: SomeException) -> return $ Left (CommandError $ show ex)
     Right output -> return $ Right output
+
 
 handleInit :: IO String
 handleInit = do
@@ -209,6 +207,17 @@ validateCommitCommand flags args =
     ([("message", Just msg)], []) | not (null msg) -> Right ()
     _ -> Left $ CommandError "Invalid usage of 'hgit commit'. Use 'hgit commit -m \"msg\"'.'"
 
+validateBranchCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
+validateBranchCommand flags args =
+  case flags of
+    [("delete", Just branchName)] -> Right () -- Deleting a branch
+    [] ->
+      case args of
+        [] -> Right () -- Listing branches
+        [branchName] -> Right () -- Creating a branch
+        _ -> Left $ CommandError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."
+    _ -> Left $ CommandError "Invalid flags for 'hgit branch'. Use '-d <branchname>' to delete a branch."
+
 handleAdd :: [(String, Maybe String)] -> [String] -> IO String
 handleAdd flags args = do
   indexMap <- readIndexFile
@@ -232,4 +241,21 @@ handleCommit flags args = do
   let commitContent = createCommitContent treeOid parentOid timestamp commitMsg
   commitOid <- createObject commitContent
   updateHEAD commitOid
-  return $ "Committed as " ++ commitOid
+  return ""
+
+handleBranch :: [(String, Maybe String)] -> [String] -> IO String
+handleBranch flags args = do
+  case flags of
+    [("delete", Just branchName)] -> do
+      deleteBranch branchName
+      return $ "Deleted branch '" ++ branchName ++ "'."
+    [] ->
+      case args of
+        [] -> do
+          listBranches
+          return ""
+        [branchName] -> do
+          createBranch branchName
+          return $ "Branch '" ++ branchName ++ "' created."
+        _ -> throwIO $ userError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."
+    _ -> throwIO $ userError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."

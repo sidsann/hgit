@@ -6,6 +6,7 @@ import ParserTests (parserTests, prop_parseInput_correct)
 import Test.HUnit
 import Test.QuickCheck
     ( quickCheckWith, stdArgs, Testable, Args(maxSuccess) )
+import BranchTests (branchTests)
 
 main :: IO ()
 main = do
@@ -17,7 +18,8 @@ main = do
           utilTests,
           initTests,
           addTests,
-          commitTests
+          commitTests,
+          branchTests
         ]
 
   -- Run QuickCheck Properties

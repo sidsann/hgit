@@ -22,7 +22,8 @@ module Utils
     byteStringToText,
     textToByteString,
     stringToByteString,
-    byteStringToString
+    byteStringToString,
+    getHeadCommitOid
   )
 where
 import Control.Exception
@@ -225,3 +226,14 @@ stringToByteString = TE.encodeUtf8.Data.Text.pack
 
 byteStringToString :: BS.ByteString -> Either UnicodeException String
 byteStringToString bs =   T.unpack <$> TE.decodeUtf8' bs
+
+-- Helper function to get the commit OID from HEAD
+getHeadCommitOid :: FilePath -> IO String
+getHeadCommitOid testDir = do
+  -- Read the 'HEAD' file to get the ref path
+  headRefBS <- readFileAsByteString (testDir </> ".hgit" </> "HEAD")
+  let headRef = BS8.unpack $ BS8.strip headRefBS -- e.g., "refs/heads/main"
+  let refFilePath = testDir </> ".hgit" </> headRef
+  -- Read the commit OID from the ref file
+  headOidBS <- readFileAsByteString refFilePath
+  return $ BS8.unpack $ BS8.strip headOidBS

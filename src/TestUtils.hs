@@ -10,7 +10,6 @@ module TestUtils
     verifyIndex,
     verifyBlobExists,
     withTestRepo,
-    getHeadCommitOid,
   )
 where
 
@@ -185,14 +184,3 @@ withTestRepo action = do
       action testDir
       setCurrentDirectory originalDir
       removeDirectoryRecursive testDir
-
--- | Helper function to get the commit OID from HEAD
-getHeadCommitOid :: FilePath -> IO String
-getHeadCommitOid testDir = do
-  -- Read the 'HEAD' file to get the ref path
-  headRefBS <- readFileAsByteString (testDir </> ".hgit" </> "HEAD")
-  let headRef = BS8.unpack $ BS8.strip headRefBS -- e.g., "refs/heads/main"
-  let refFilePath = testDir </> ".hgit" </> headRef
-  -- Read the commit OID from the ref file
-  headOidBS <- readFileAsByteString refFilePath
-  return $ BS8.unpack $ BS8.strip headOidBS

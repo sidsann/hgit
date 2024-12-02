@@ -1,9 +1,10 @@
 module CommandParser where
 
-import Data.List (find, isPrefixOf)
-import qualified Data.Set as Set
-import Data.Maybe (maybeToList)
+import Control.Exception
 import Data.Char (isSpace)
+import Data.List (find, isPrefixOf)
+import Data.Maybe (maybeToList)
+import Data.Set qualified as Set
 import Utils
 
 data Command = Command
@@ -29,16 +30,20 @@ data Flag = Flag
   { longName :: String,
     shortName :: Maybe String,
     flagType :: FlagType
-  } deriving (Show, Eq, Ord)
+  }
+  deriving (Show, Eq, Ord)
 
 data ParsedCommand = ParsedCommand
   { parsedSubcommand :: Command,
     parsedFlags :: [(String, Maybe String)],
     parsedArguments :: [String]
-  } deriving (Show, Eq)
+  }
+  deriving (Show, Eq)
 
 newtype CommandError = CommandError String
   deriving (Show, Eq)
+
+instance Exception CommandError
 
 -- | Default validation function
 defaultValidate :: [(String, Maybe String)] -> [String] -> Either CommandError ()
@@ -50,12 +55,12 @@ tokenizeInput :: String -> [String]
 tokenizeInput input =
   case dropWhile isSpace input of
     "" -> []
-    ('"':remaining) ->
+    ('"' : remaining) ->
       let (quoted, rest) = break (== '"') remaining
-      in quoted : tokenizeInput (drop 1 rest)
+       in quoted : tokenizeInput (drop 1 rest)
     remaining ->
       let (token, rest) = break isSpace remaining
-      in token : tokenizeInput rest
+       in token : tokenizeInput rest
 
 -- | Parse the input to find the command, flags, and arguments
 parseInput :: [Command] -> String -> Either CommandError ParsedCommand
@@ -80,12 +85,18 @@ parseFlagsAndArgs availableFlags tokens = parseTokens availableFlags tokens [] [
 
 parseTokens :: [Flag] -> [String] -> [(String, Maybe String)] -> [String] -> [String] -> Bool -> Either CommandError ([(String, Maybe String)], [String])
 parseTokens _ [] parsedFlags args _ _ = Right (reverse parsedFlags, reverse args)
-parseTokens availableFlags (x:xs) parsedFlags args usedFlags seenArg
+parseTokens availableFlags (x : xs) parsedFlags args usedFlags seenArg
   | not seenArg && isFlag x = handleFlag availableFlags x xs parsedFlags args usedFlags
-  | otherwise = parseTokens availableFlags xs parsedFlags (x:args) usedFlags True
+  | otherwise = parseTokens availableFlags xs parsedFlags (x : args) usedFlags True
 
-handleFlag :: [Flag] -> String -> [String] -> [(String, Maybe String)] -> [String] -> [String]
-           -> Either CommandError ([(String, Maybe String)], [String])
+handleFlag ::
+  [Flag] ->
+  String ->
+  [String] ->
+  [(String, Maybe String)] ->
+  [String] ->
+  [String] ->
+  Either CommandError ([(String, Maybe String)], [String])
 handleFlag availableFlags flagToken rest parsedFlags args usedFlags = do
   flag <- matchFlag flagToken availableFlags
   let conflictingFlagNames = longName flag : maybeToList (shortName flag)
@@ -95,23 +106,29 @@ handleFlag availableFlags flagToken rest parsedFlags args usedFlags = do
       RequiresArg -> handleRequiredFlag availableFlags flag rest parsedFlags args (conflictingFlagNames ++ usedFlags)
       NoArg -> parseTokens availableFlags rest ((longName flag, Nothing) : parsedFlags) args (conflictingFlagNames ++ usedFlags) False
 
-handleRequiredFlag :: [Flag] -> Flag -> [String] -> [(String, Maybe String)] -> [String] -> [String]
-                   -> Either CommandError ([(String, Maybe String)], [String])
+handleRequiredFlag ::
+  [Flag] ->
+  Flag ->
+  [String] ->
+  [(String, Maybe String)] ->
+  [String] ->
+  [String] ->
+  Either CommandError ([(String, Maybe String)], [String])
 handleRequiredFlag _ flag [] _ _ _ =
   Left $ CommandError $ "Flag " ++ longName flag ++ " requires a value, but none was provided."
-handleRequiredFlag availableFlags flag (value:rest) parsedFlags args usedFlags =
+handleRequiredFlag availableFlags flag (value : rest) parsedFlags args usedFlags =
   parseTokens availableFlags rest ((longName flag, Just value) : parsedFlags) args usedFlags False
 
 -- Determines if a token is a flag
 isFlag :: String -> Bool
-isFlag ('-':_) = True
+isFlag ('-' : _) = True
 isFlag _ = False
 
 -- Matches a token to a Flag definition
 matchFlag :: String -> [Flag] -> Either CommandError Flag
 matchFlag token flags =
-  let strippedToken = dropWhile (== '-') token  -- Remove leading '-' or '--'
-  in case filter (\f -> longName f == strippedToken || shortName f == Just strippedToken) flags of
-       [] -> Left $ CommandError $ "Unknown flag: " ++ token
-       [flag] -> Right flag
-       _ -> Left $ CommandError $ "Ambiguous flag: " ++ token
+  let strippedToken = dropWhile (== '-') token -- Remove leading '-' or '--'
+   in case filter (\f -> longName f == strippedToken || shortName f == Just strippedToken) flags of
+        [] -> Left $ CommandError $ "Unknown flag: " ++ token
+        [flag] -> Right flag
+        _ -> Left $ CommandError $ "Ambiguous flag: " ++ token

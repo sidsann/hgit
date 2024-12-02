@@ -2,11 +2,9 @@
 
 module CommitTests
   ( commitTests,
-    testCommitObjectStructure,
   )
 where
 
--- import Utils
 import CommandHandler
 import CommandParser
   ( Command (..),
@@ -30,6 +28,7 @@ import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
 import Test.HUnit
 import TestUtils
 import Utils
+import System.Directory (removeFile, removeDirectoryRecursive)
 
 -- | Asserts that a commit command fails with a CommandError
 assertCommitFailure :: [(String, Maybe String)] -> [String] -> IO ()
@@ -251,6 +250,100 @@ testCommitObjectStructure = TestCase $ withTestRepo $ \testDir -> do
                 let dirName = head $ splitDirectories (takeDirectory file)
                 assertBool ("Tree should contain subtree " ++ dirName) (dirName `Map.member` treeEntriesMap)
 
+testHandleDeletedFiles :: Test
+testHandleDeletedFiles = TestCase $ withTestRepo $ \testDir -> do
+    -- Step 1: Create initial files
+    let initialFiles =
+            [ ("file1.txt", "Hello World"),
+              ("file2.txt", "Goodbye World"),
+              ("src/main.hs", "main function"),
+              ("src/utils/helpers.hs", "Helper functions")
+            ]
+    createFiles initialFiles
+    
+    -- Step 2: Add all files
+    runAddCommand [] ["file1.txt", "file2.txt", "src/main.hs", "src/utils/helpers.hs"]
+    
+    -- Step 3: Commit initial state
+    runCommitCommand [("message", Just "Initial commit with src")] []
+    
+    -- Step 4: Delete 'file1.txt'
+    removeFile "file1.txt"
+    
+    -- Step 5: Add changes (which includes deletion)
+    runAddCommand [] ["file1.txt"] 
+    
+    -- Step 6: Commit after deletion
+    runCommitCommand [("message", Just "Remove file1.txt")] []
+    
+    -- Step 7: Get the latest commit
+    headOid <- getHeadCommitOid testDir
+    
+    -- Step 8: Deserialize the latest commit
+    commitResult <- deserializeCommit headOid
+    case commitResult of
+        Left err -> assertFailure $ "Failed to deserialize commit: " ++ err
+        Right commit -> do
+            -- Step 9: Deserialize the tree
+            treeResult <- deserializeTree (treeOid commit)
+            case treeResult of
+                Left err -> assertFailure $ "Failed to deserialize tree: " ++ err
+                Right tree -> do
+                    -- Step 10: Read the updated index
+                    updatedIndex <- readIndexFile
+                    -- Step 11: Verify 'file1.txt' is no longer in the index and that 'file2.txt' is still there
+                    assertBool "file1.txt should be removed from the index" (not $ Map.member "file1.txt" updatedIndex)
+                    assertBool "file2.txt should still be in the index" (Map.member "file2.txt" updatedIndex)
+
+testHandleDeletedDirectory :: Test
+testHandleDeletedDirectory = TestCase $ withTestRepo $ \testDir -> do
+    -- Step 1: Create initial files, including a directory
+    let initialFiles =
+            [ ("file1.txt", "Hello World"),
+              ("file2.txt", "Goodbye World"),
+              ("src/main.hs", "main function"),
+              ("src/utils/helpers.hs", "Helper functions")
+            ]
+    createFiles initialFiles
+    
+    -- Step 2: Add all files
+    runAddCommand [] ["file1.txt", "file2.txt", "src/main.hs", "src/utils/helpers.hs"]
+    
+    -- Step 3: Commit initial state
+    runCommitCommand [("message", Just "Initial commit with src")] []
+    
+    -- Step 4: Delete the 'src' directory
+    removeDirectoryRecursive "src"
+    
+    -- Step 5: Add changes (which includes directory deletion)
+    runAddCommand [] ["src"] -- Attempt to add the deleted directory
+    
+    -- Step 6: Commit after deletion
+    runCommitCommand [("message", Just "Remove src directory")] []
+    
+    -- Step 7: Get the latest commit
+    headOid <- getHeadCommitOid testDir
+    
+    -- Step 8: Deserialize the latest commit
+    commitResult <- deserializeCommit headOid
+    case commitResult of
+        Left err -> assertFailure $ "Failed to deserialize commit: " ++ err
+        Right commit -> do
+            -- Step 9: Deserialize the tree
+            treeResult <- deserializeTree (treeOid commit)
+            case treeResult of
+                Left err -> assertFailure $ "Failed to deserialize tree: " ++ err
+                Right tree -> do
+                    -- Step 10: Read the updated index
+                    updatedIndex <- readIndexFile
+                    -- Step 11: Verify 'src' and its contained files are no longer in the index
+                    let filesUnderSrc = ["src/main.hs", "src/utils/helpers.hs"]
+                    forM_ filesUnderSrc $ \file -> do
+                        assertBool (file ++ " should be removed from the index") (not $ Map.member file updatedIndex)
+                    -- Verify that other files are still present
+                    assertBool "file1.txt should still be in the index" (Map.member "file1.txt" updatedIndex)
+                    assertBool "file2.txt should still be in the index" (Map.member "file2.txt" updatedIndex)
+
 -- | Collection of all commit tests
 commitTests :: Test
 commitTests =
@@ -263,5 +356,7 @@ commitTests =
         TestLabel "Commit Without Changes" testCommitNoChanges,
         TestLabel "Commit With Additional Files" testCommitWithAdditionalFiles,
         TestLabel "Commit Sequence" testCommitSequence,
-        TestLabel "Commit Object Structure with Subtrees" testCommitObjectStructure
+        TestLabel "Commit Object Structure with Subtrees" testCommitObjectStructure,
+        TestLabel "Tracked File Deletion Between Commits" testHandleDeletedFiles,
+        TestLabel "Tracked Directory Deletion Between Commits" testHandleDeletedDirectory
       ]
