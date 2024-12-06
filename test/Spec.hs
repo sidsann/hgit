@@ -2,6 +2,7 @@ import AddTests (addTests)
 import CommitTests (commitTests)
 import InitTests (initTests)
 import UtilTests (utilTests)
+import LogTests(logTests)
 import ParserTests (parserTests, prop_parseInput_correct)
 import Test.HUnit ( runTestTT, Test(TestList) )
 import Test.QuickCheck
@@ -19,7 +20,8 @@ main = do
           initTests,
           addTests,
           commitTests,
-          branchTests
+          branchTests,
+          logTests
         ]
 
   -- Run QuickCheck Properties

@@ -5,7 +5,6 @@ import Data.Char (isSpace)
 import Data.List (find, isPrefixOf)
 import Data.Maybe (maybeToList)
 import Data.Set qualified as Set
-import Utils
 
 data Command = Command
   { subcommand :: String,
@@ -49,18 +48,6 @@ instance Exception CommandError
 defaultValidate :: [(String, Maybe String)] -> [String] -> Either CommandError ()
 defaultValidate [] [] = Right ()
 defaultValidate _ _ = Left $ CommandError "This command does not accept any flags or arguments."
-
--- -- | Parses a string into tokens, respecting quoted substrings.
--- tokenizeInput :: String -> [String]
--- tokenizeInput input =
---   case dropWhile isSpace input of
---     "" -> []
---     ('"' : remaining) ->
---       let (quoted, rest) = break (== '"') remaining
---        in quoted : tokenizeInput (drop 1 rest)
---     remaining ->
---       let (token, rest) = break isSpace remaining
---        in token : tokenizeInput rest
 
 -- | Parse the input to find the command, flags, and arguments
 parseInput :: [Command] -> [String] -> Either CommandError ParsedCommand

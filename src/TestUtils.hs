@@ -53,8 +53,6 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Set qualified as Set
-import Data.Time.Clock (getCurrentTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
 import Index (readIndexFile, writeIndexFile)
 import System.Directory
   ( createDirectoryIfMissing,

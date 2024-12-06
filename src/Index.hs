@@ -35,7 +35,7 @@ import System.FilePath
     takeFileName,
     (</>)
   )
-import Data.List (isPrefixOf, (\\)) -- Correctly import the list difference operator
+import Data.List (isPrefixOf, (\\))
 import CommandParser ( CommandError(..) )
 import Utils
     ( doesDirectoryExist,

@@ -2,7 +2,7 @@ module CommandHandler (commandHandler, commands) where
 
 import CommandParser (Command (..), CommandError (..), Flag (..), FlagType (..), ParsedCommand (..), defaultValidate)
 import Commit
-    ( buildTree, createCommitContent, getCurrentCommitOid, updateHEAD )
+    ( buildTree, createCommitContent, getCurrentCommitOid, updateHEAD, Commit (treeOid, timestamp, message), deserializeCommit, parentOid )
 import Control.Exception (SomeException, throwIO, try)
 import Control.Monad (unless, when)
 import Data.Map.Strict qualified as Map
@@ -21,8 +21,9 @@ import Utils
       getObjectsPath,
       getHeadPath,
       getHEADFilePath,
-      stringToByteString )
+      stringToByteString, getHeadCommitOid )
 import Branch ( listBranches, createBranch, deleteBranch )
+import Data.List (intercalate)
 
 commands :: [Command]
 commands =
@@ -62,7 +63,7 @@ commands =
           [ Flag { longName = "delete", shortName = Just "d", flagType = RequiresArg }
           ],
         validate = validateBranchCommand
-      }
+      },
       -- , Command
       --     { subcommand = "switch",
       --       description =
@@ -72,13 +73,13 @@ commands =
       --         ],
       --       args = [ "branchname" ]
       --     }
-      -- , Command
-      --     { subcommand = "log",
-      --       description =
-      --         "Displays commit logs in reverse chronological order, showing commit hashes, branch information, authors, timestamps, and commit messages.",
-      --       flags = [],
-      --       args = []
-      --     }
+    Command
+      { subcommand = "log",
+        description =
+          "Displays commit logs in reverse chronological order, showing commit hashes, timestamps, and commit messages.",
+        flags = [],
+        validate = defaultValidate
+      }
       -- , Command
       --     { subcommand = "status",
       --       description =
@@ -163,6 +164,8 @@ commandHandler parsedCmd = do
     "add" -> handleAdd flags args
     "commit" -> handleCommit flags args
     "branch" -> handleBranch flags args
+    "log" -> handleLog
+
 
     -- Add other command handlers here
     _ -> throwIO $ userError $ "Unknown subcommand: " ++ cmdStr
@@ -259,3 +262,38 @@ handleBranch flags args = do
           return $ "Branch '" ++ branchName ++ "' created."
         _ -> throwIO $ userError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."
     _ -> throwIO $ userError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."
+
+-- | Handle the 'log' command
+handleLog :: IO String
+handleLog = do
+  hgitPath <- getHgitPath
+  oidStr <- getHeadCommitOid hgitPath
+  let headOid = if null oidStr then Nothing else Just oidStr
+  case headOid of
+    Nothing -> return "No commits found."
+    Just oid -> traverseCommits oid []
+
+-- | Traverse commits starting from the given OID
+traverseCommits :: String -> [Commit] -> IO String
+traverseCommits oid acc = do
+  commitResult <- deserializeCommit oid
+  case commitResult of
+    Left err -> return $ "Error reading commit " ++ oid ++ ": " ++ err
+    Right commit -> do
+      let newAcc = acc ++ [commit]
+      case parentOid commit of
+        Nothing -> formatCommits newAcc
+        Just parent -> traverseCommits parent newAcc
+
+-- | Format the list of commits into a string
+formatCommits :: [Commit] -> IO String
+formatCommits commits = do
+  let formatted = intercalate "\n\n" $ map formatCommit (reverse commits)
+  return formatted
+
+-- | Format a single commit
+formatCommit :: Commit -> String
+formatCommit commit =
+  "commit " ++ treeOid commit ++ " (HEAD -> main)\n" ++
+  "Date:   " ++ timestamp commit ++ "\n\n" ++
+  "    " ++ message commit

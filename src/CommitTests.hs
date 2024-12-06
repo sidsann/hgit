@@ -63,6 +63,39 @@ verifyCommit testDir commitOid expectedParentOid expectedMessage = do
       expectedTreeOid <- buildTree indexMap
       assertEqual "Commit tree OID mismatch" expectedTreeOid (treeOid commit)
 
+-- | Helper function to create and add files
+createAndAddFiles :: [(FilePath, String)] -> IO ()
+createAndAddFiles files = do
+  createFiles files
+  let filePaths = map fst files
+  runAddCommand [] filePaths
+
+-- | Helper function to perform commit with a message
+commitWithMessage :: String -> IO ()
+commitWithMessage msg = do
+  runCommitCommand [("message", Just msg)] []
+
+-- | Helper function to perform commit with flags and arguments
+commitWithFlags :: [(String, Maybe String)] -> [String] -> IO ()
+commitWithFlags = runCommitCommand
+
+-- | Collection of all commit tests
+commitTests :: Test
+commitTests =
+  TestLabel "Commit Command Tests" $
+    TestList
+      [ TestLabel "Commit Without Message" testCommitWithoutMessage,
+        TestLabel "Commit With Empty Message" testCommitWithEmptyMessage,
+        TestLabel "Initial Commit" testInitialCommit,
+        TestLabel "Multiple Commits" testMultipleCommits,
+        TestLabel "Commit Without Changes" testCommitNoChanges,
+        TestLabel "Commit With Additional Files" testCommitWithAdditionalFiles,
+        TestLabel "Commit Sequence" testCommitSequence,
+        TestLabel "Commit Object Structure with Subtrees" testCommitObjectStructure,
+        TestLabel "Tracked File Deletion Between Commits" testHandleDeletedFiles,
+        TestLabel "Tracked Directory Deletion Between Commits" testHandleDeletedDirectory
+      ]
+
 -- | Test committing without -m flag should fail
 testCommitWithoutMessage :: Test
 testCommitWithoutMessage = TestCase $ withTestRepo $ \_testDir -> do
@@ -76,47 +109,31 @@ testCommitWithEmptyMessage = TestCase $ withTestRepo $ \_testDir -> do
 -- | Test initial commit without previous commits
 testInitialCommit :: Test
 testInitialCommit = TestCase $ withTestRepo $ \testDir -> do
-  -- Create and add files
-  let files =
+  let initialFiles =
         [ ("file1.txt", "Hello World"),
           ("file2.txt", "Initial commit file")
         ]
-  createFiles files
-
-  -- Add files to index
-  runAddCommand [] ["file1.txt", "file2.txt"]
-
-  -- Commit with message
-  runCommitCommand [("message", Just "Initial commit")] []
-
-  -- Get current commit OID from HEAD
+  createAndAddFiles initialFiles
+  commitWithMessage "Initial commit"
   headOid <- getHeadCommitOid testDir
-
-  -- Verify commit
   verifyCommit testDir headOid Nothing "Initial commit"
 
 -- | Test multiple commits and verify parent pointers
 testMultipleCommits :: Test
 testMultipleCommits = TestCase $ withTestRepo $ \testDir -> do
   -- Initial commit
-  let files1 =
+  let initialFiles =
         [ ("file1.txt", "Hello World"),
           ("file2.txt", "Initial commit file")
         ]
-  createFiles files1
-  runAddCommand [] ["file1.txt", "file2.txt"]
-  runCommitCommand [("message", Just "Initial commit")] []
-
-  -- Get first commit OID
+  createAndAddFiles initialFiles
+  commitWithMessage "Initial commit"
   headOid1 <- getHeadCommitOid testDir
 
-  -- Modify a file and commit again
-  let files2 = [("file1.txt", "Hello World Updated")]
-  createFiles files2
-  runAddCommand [] ["file1.txt"]
-  runCommitCommand [("message", Just "Second commit")] []
-
-  -- Get second commit OID
+  -- Second commit
+  let modifiedFiles = [("file1.txt", "Hello World Updated")]
+  createAndAddFiles modifiedFiles
+  commitWithMessage "Second commit"
   headOid2 <- getHeadCommitOid testDir
 
   -- Verify second commit
@@ -125,26 +142,16 @@ testMultipleCommits = TestCase $ withTestRepo $ \testDir -> do
 -- | Test committing when there are no changes should create a new commit or fail
 testCommitNoChanges :: Test
 testCommitNoChanges = TestCase $ withTestRepo $ \testDir -> do
-  -- Initial commit
-  let files =
+  let initialFiles =
         [ ("file1.txt", "Hello World"),
           ("file2.txt", "Initial commit file")
         ]
-  createFiles files
-
-  -- Add files to index
-  runAddCommand [] ["file1.txt", "file2.txt"]
-
-  -- Commit with message
-  runCommitCommand [("message", Just "Initial commit")] []
-
-  -- Get first commit OID
+  createAndAddFiles initialFiles
+  commitWithMessage "Initial commit"
   firstCommitOid <- getHeadCommitOid testDir
 
   -- Attempt to commit again without changes
-  runCommitCommand [("message", Just "No changes commit")] []
-
-  -- Get second commit OID
+  commitWithMessage "No changes commit"
   secondCommitOid <- getHeadCommitOid testDir
 
   -- Verify second commit
@@ -154,24 +161,18 @@ testCommitNoChanges = TestCase $ withTestRepo $ \testDir -> do
 testCommitWithAdditionalFiles :: Test
 testCommitWithAdditionalFiles = TestCase $ withTestRepo $ \testDir -> do
   -- Initial commit
-  let files1 =
+  let initialFiles =
         [ ("file1.txt", "Hello World"),
           ("file2.txt", "Initial commit file")
         ]
-  createFiles files1
-  runAddCommand [] ["file1.txt", "file2.txt"]
-  runCommitCommand [("message", Just "Initial commit")] []
-
-  -- Get first commit OID
+  createAndAddFiles initialFiles
+  commitWithMessage "Initial commit"
   headOid1 <- getHeadCommitOid testDir
 
   -- Add a new file and commit
-  let files2 = [("file3.txt", "New file in second commit")]
-  createFiles files2
-  runAddCommand [] ["file3.txt"]
-  runCommitCommand [("message", Just "Added file3.txt")] []
-
-  -- Get second commit OID
+  let newFiles = [("file3.txt", "New file in second commit")]
+  createAndAddFiles newFiles
+  commitWithMessage "Added file3.txt"
   headOid2 <- getHeadCommitOid testDir
 
   -- Verify second commit
@@ -185,52 +186,39 @@ testCommitSequence = TestCase $ withTestRepo $ \testDir -> do
         [ ("file1.txt", "Hello World"),
           ("file2.txt", "Initial commit file")
         ]
-  createFiles files1
-  runAddCommand [] ["file1.txt", "file2.txt"]
-  runCommitCommand [("message", Just "Initial commit")] []
-
-  -- Get first commit OID
+  createAndAddFiles files1
+  commitWithMessage "Initial commit"
   headOid1 <- getHeadCommitOid testDir
 
   -- Commit 2
-  let files2 = [("file1.txt", "Hello World Updated"), ("file3.txt", "New file in commit 2")]
-  createFiles files2
-  runAddCommand [] ["file1.txt", "file3.txt"]
-  runCommitCommand [("message", Just "Second commit")] []
-
-  -- Get second commit OID
+  let files2 =
+        [ ("file1.txt", "Hello World Updated"),
+          ("file3.txt", "New file in commit 2")
+        ]
+  createAndAddFiles files2
+  commitWithMessage "Second commit"
   headOid2 <- getHeadCommitOid testDir
 
   -- Commit 3
   let files3 = [("file4.txt", "Another new file in commit 3")]
-  createFiles files3
-  runAddCommand [] ["file4.txt"]
-  runCommitCommand [("message", Just "Third commit")] []
-
-  -- Get third commit OID
+  createAndAddFiles files3
+  commitWithMessage "Third commit"
   headOid3 <- getHeadCommitOid testDir
 
   -- Verify third commit
   verifyCommit testDir headOid3 (Just headOid2) "Third commit"
 
+-- | Test commit object structure with subtrees
 testCommitObjectStructure :: Test
 testCommitObjectStructure = TestCase $ withTestRepo $ \testDir -> do
-  -- Create and add files
   let files =
         [ ("file1.txt", "Hello World"),
           ("file2.txt", "Initial commit file"),
           ("src/main.hs", "main function"),
           ("src/utils/helpers.hs", "Helper functions")
         ]
-  createFiles files
-
-  -- Add all files
-  runAddCommand [] ["file1.txt", "file2.txt", "src"]
-
-  -- Commit with message
-  runCommitCommand [("message", Just "Initial commit with src")] []
-
-  -- Get current commit OID
+  createAndAddFiles files
+  commitWithMessage "Initial commit with src"
   headOid <- getHeadCommitOid testDir
 
   -- Deserialize commit
@@ -257,113 +245,84 @@ testCommitObjectStructure = TestCase $ withTestRepo $ \testDir -> do
                 let dirName = head $ splitDirectories (takeDirectory file)
                 assertBool ("Tree should contain subtree " ++ dirName) (dirName `Map.member` treeEntriesMap)
 
+-- | Test handling deletion of tracked files between commits
 testHandleDeletedFiles :: Test
 testHandleDeletedFiles = TestCase $ withTestRepo $ \testDir -> do
-    -- Step 1: Create initial files
+    -- Initial setup
     let initialFiles =
             [ ("file1.txt", "Hello World"),
               ("file2.txt", "Goodbye World"),
               ("src/main.hs", "main function"),
               ("src/utils/helpers.hs", "Helper functions")
             ]
-    createFiles initialFiles
-    
-    -- Step 2: Add all files
-    runAddCommand [] ["file1.txt", "file2.txt", "src/main.hs", "src/utils/helpers.hs"]
-    
-    -- Step 3: Commit initial state
-    runCommitCommand [("message", Just "Initial commit with src")] []
-    
-    -- Step 4: Delete 'file1.txt'
+    createAndAddFiles initialFiles
+    commitWithMessage "Initial commit with src"
+
+    -- Delete 'file1.txt'
     removeFile "file1.txt"
-    
-    -- Step 5: Add changes (which includes deletion)
-    runAddCommand [] ["file1.txt"] 
-    
-    -- Step 6: Commit after deletion
-    runCommitCommand [("message", Just "Remove file1.txt")] []
-    
-    -- Step 7: Get the latest commit
+
+    -- Add changes (which includes deletion)
+    runAddCommand [] ["file1.txt"]
+
+    -- Commit after deletion
+    commitWithMessage "Remove file1.txt"
     headOid <- getHeadCommitOid testDir
-    
-    -- Step 8: Deserialize the latest commit
+
+    -- Deserialize the latest commit
     commitResult <- deserializeCommit headOid
     case commitResult of
         Left err -> assertFailure $ "Failed to deserialize commit: " ++ err
         Right commit -> do
-            -- Step 9: Deserialize the tree
+            -- Deserialize the tree
             treeResult <- deserializeTree (treeOid commit)
             case treeResult of
                 Left err -> assertFailure $ "Failed to deserialize tree: " ++ err
                 Right tree -> do
-                    -- Step 10: Read the updated index
+                    -- Read the updated index
                     updatedIndex <- readIndexFile
-                    -- Step 11: Verify 'file1.txt' is no longer in the index and that 'file2.txt' is still there
+                    -- Verify 'file1.txt' is no longer in the index and that 'file2.txt' is still there
                     assertBool "file1.txt should be removed from the index" (not $ Map.member "file1.txt" updatedIndex)
                     assertBool "file2.txt should still be in the index" (Map.member "file2.txt" updatedIndex)
 
+-- | Test handling deletion of tracked directories between commits
 testHandleDeletedDirectory :: Test
 testHandleDeletedDirectory = TestCase $ withTestRepo $ \testDir -> do
-    -- Step 1: Create initial files, including a directory
+    -- Initial setup
     let initialFiles =
             [ ("file1.txt", "Hello World"),
               ("file2.txt", "Goodbye World"),
               ("src/main.hs", "main function"),
               ("src/utils/helpers.hs", "Helper functions")
             ]
-    createFiles initialFiles
-    
-    -- Step 2: Add all files
-    runAddCommand [] ["file1.txt", "file2.txt", "src/main.hs", "src/utils/helpers.hs"]
-    
-    -- Step 3: Commit initial state
-    runCommitCommand [("message", Just "Initial commit with src")] []
-    
-    -- Step 4: Delete the 'src' directory
+    createAndAddFiles initialFiles
+    commitWithMessage "Initial commit with src"
+
+    -- Delete the 'src' directory
     removeDirectoryRecursive "src"
-    
-    -- Step 5: Add changes (which includes directory deletion)
+
+    -- Add changes (which includes directory deletion)
     runAddCommand [] ["src"] -- Attempt to add the deleted directory
-    
-    -- Step 6: Commit after deletion
-    runCommitCommand [("message", Just "Remove src directory")] []
-    
-    -- Step 7: Get the latest commit
+
+    -- Commit after deletion
+    commitWithMessage "Remove src directory"
     headOid <- getHeadCommitOid testDir
-    
-    -- Step 8: Deserialize the latest commit
+
+    -- Deserialize the latest commit
     commitResult <- deserializeCommit headOid
     case commitResult of
         Left err -> assertFailure $ "Failed to deserialize commit: " ++ err
         Right commit -> do
-            -- Step 9: Deserialize the tree
+            -- Deserialize the tree
             treeResult <- deserializeTree (treeOid commit)
             case treeResult of
                 Left err -> assertFailure $ "Failed to deserialize tree: " ++ err
                 Right tree -> do
-                    -- Step 10: Read the updated index
+                    -- Read the updated index
                     updatedIndex <- readIndexFile
-                    -- Step 11: Verify 'src' and its contained files are no longer in the index
+                    -- Verify 'src' and its contained files are no longer in the index
                     let filesUnderSrc = ["src/main.hs", "src/utils/helpers.hs"]
                     forM_ filesUnderSrc $ \file -> do
                         assertBool (file ++ " should be removed from the index") (not $ Map.member file updatedIndex)
                     -- Verify that other files are still present
                     assertBool "file1.txt should still be in the index" (Map.member "file1.txt" updatedIndex)
                     assertBool "file2.txt should still be in the index" (Map.member "file2.txt" updatedIndex)
-
--- | Collection of all commit tests
-commitTests :: Test
-commitTests =
-  TestLabel "Commit Command Tests" $
-    TestList
-      [ TestLabel "Commit Without Message" testCommitWithoutMessage,
-        TestLabel "Commit With Empty Message" testCommitWithEmptyMessage,
-        TestLabel "Initial Commit" testInitialCommit,
-        TestLabel "Multiple Commits" testMultipleCommits,
-        TestLabel "Commit Without Changes" testCommitNoChanges,
-        TestLabel "Commit With Additional Files" testCommitWithAdditionalFiles,
-        TestLabel "Commit Sequence" testCommitSequence,
-        TestLabel "Commit Object Structure with Subtrees" testCommitObjectStructure,
-        TestLabel "Tracked File Deletion Between Commits" testHandleDeletedFiles,
-        TestLabel "Tracked Directory Deletion Between Commits" testHandleDeletedDirectory
-      ]
