@@ -29,6 +29,7 @@ import TestUtils
     runCommand,
     withTestRepo )
 import Utils ( readFileAsByteString, getHeadCommitOid )
+import qualified Data.Bifunctor
 
 -- | Splits a string into a list of substrings based on a given delimiter.
 -- Example: splitOn "commit " "commit abc commit def" = ["", "abc ", "def"]
@@ -41,7 +42,7 @@ splitOn delim str = splitHelper delim str []
       case findDelimiter d s of
         Nothing -> reverse (s : acc)
         Just (before, after) -> splitHelper d after (before : acc)
-    
+
     -- | Finds the first occurrence of the delimiter in the string.
     -- Returns the substring before the delimiter and the substring after.
     findDelimiter :: String -> String -> Maybe (String, String)
@@ -51,24 +52,25 @@ splitOn delim str = splitHelper delim str []
           case s of
             [] -> Nothing
             (_:xs) ->
-              fmap (\(b, a) -> (head s : b, a)) (findDelimiter d xs)
+              fmap (Data.Bifunctor.first (head s :)) (findDelimiter d xs)
 
 -- | Helper function to count the number of commits in the log output
 countCommitsInLog :: String -> Int
 countCommitsInLog logOutput =
   length $ filter (isPrefixOf "commit ") (lines logOutput)
 
--- | Helper function to extract commit message from a commit section
+-- | Helper function to remove leading and trailing whitespace
+trimSpaces :: String -> String
+trimSpaces = reverse . dropWhile (== ' ') . reverse . dropWhile (== ' ')
+
 extractCommitMessage :: String -> String
 extractCommitMessage section =
   let linesOfSection = lines section
-      -- Commit message is the lines after the "Date:" line
       messageLines = dropWhile (not . isPrefixOf "Date:") linesOfSection
-      messageContent = drop 1 messageLines -- drop "Date:" line
-      -- The commit message lines are after an empty line
+      messageContent = drop 1 messageLines
       msg = dropWhile (not . null) messageContent
       cleanMessages = map (dropWhile (== ' ')) msg
-  in unwords cleanMessages
+  in trimSpaces $ unwords cleanMessages
 
 -- | Retrieve the 'log' command from the list of available commands
 getLogCommand :: [Command] -> Either CommandError Command

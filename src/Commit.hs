@@ -1,9 +1,10 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 {-# HLINT ignore "Use newtype instead of data" #-}
 module Commit where
 
 import CommandParser (CommandError (..))
-import Control.Monad (unless, when, forM_)
+import Control.Monad (forM_, unless, when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import Data.List (isPrefixOf, sort)
@@ -19,11 +20,12 @@ import System.FilePath
     (</>),
   )
 import Utils
-    ( createObject,
-      readAndDecompressObject,
-      getHgitPath,
-      getHEADFilePath,
-      stringToByteString )
+  ( createObject,
+    getHEADFilePath,
+    getHgitPath,
+    readAndDecompressObject,
+    stringToByteString,
+  )
 
 -- | Data structure representing a Commit
 data Commit = Commit
@@ -130,10 +132,11 @@ buildTreeRecursive dirPath indexMap = do
 
 -- | Collect unique subdirectories, excluding the current directory
 collectSubDirs :: Map FilePath a -> Map FilePath ()
-collectSubDirs = Map.fromList
-             . map (\k -> (takeDirectory k, ()))
-             . filter (\k -> takeDirectory k /= ".")
-             . Map.keys
+collectSubDirs =
+  Map.fromList
+    . map (\k -> (takeDirectory k, ()))
+    . filter (\k -> takeDirectory k /= ".")
+    . Map.keys
 
 -- | Create a tree entry
 buildTreeEntry :: String -> String -> String -> BS.ByteString
@@ -164,8 +167,7 @@ createCommitContent treeOid parentOid timestamp commitMsg =
           ++ parentLine
           ++ "timestamp "
           ++ timestamp
-          ++ " +0000\n"
-          ++ "\n"
+          ++ "\n\n"
           ++ commitMsg
    in BS8.pack content
 

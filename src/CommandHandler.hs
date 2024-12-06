@@ -9,6 +9,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified (pack)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.Time.LocalTime (getCurrentTimeZone, utcToLocalTime, TimeZone)
 import Index (readIndexFile, updateIndex, writeIndexFile)
 import Utils
     ( doesDirectoryExist,
@@ -24,6 +26,7 @@ import Utils
       stringToByteString, getHeadCommitOid )
 import Branch ( listBranches, createBranch, deleteBranch )
 import Data.List (intercalate)
+import System.FilePath (takeDirectory)
 
 commands :: [Command]
 commands =
@@ -84,61 +87,6 @@ commands =
       --     { subcommand = "status",
       --       description =
       --         "Shows the working tree status, including changes to be committed, changes not staged for commit, and untracked files.",
-      --       flags = [],
-      --       args = []
-      --     }
-      
-      -- , Command
-      --     { subcommand = "clean",
-      --       description =
-      --         "Removes untracked files from the working tree.",
-      --       flags = [],
-      --       args = []
-      --     }
-      -- , Command
-      --     { subcommand = "reset",
-      --       description =
-      --         "Resets the current HEAD to the specified state, with options to modify the index and working tree.",
-      --       flags =
-      --         [ Flag { longName = "hard", shortName = Just "h", flagType = Optional },
-      --           Flag { longName = "soft", shortName = Just "s", flagType = Optional }
-      --         ],
-      --       args = [ "commit-hash" ]
-      --     }
-      -- , Command
-      --     { subcommand = "revert",
-      --       description =
-      --         "Reverts some existing commits by creating new commits that undo the changes.",
-      --       flags = [],
-      --       args = [ "commit-hash" ]
-      --     }
-      -- , Command
-      --     { subcommand = "restore",
-      --       description =
-      --         "Restores working tree files to a specified state.",
-      --       flags = [],
-      --       args = [ "filename" ]
-      --     }
-      -- , Command
-      --     { subcommand = "rm",
-      --       description =
-      --         "Removes files from the working tree and the index.",
-      --       flags =
-      --         [ Flag { longName = "cached", shortName = Nothing, flagType = Optional }
-      --         ],
-      --       args = [ "filename" ]
-      --     }
-      -- , Command
-      --     { subcommand = "mv",
-      --       description =
-      --         "Moves or renames a file, directory, or symlink.",
-      --       flags = [],
-      --       args = [ "source", "destination" ]
-      --     }
-      -- , Command
-      --     { subcommand = "help",
-      --       description =
-      --         "Displays help information about hgit commands.",
       --       flags = [],
       --       args = []
       --     }
@@ -267,7 +215,8 @@ handleBranch flags args = do
 handleLog :: IO String
 handleLog = do
   hgitPath <- getHgitPath
-  oidStr <- getHeadCommitOid hgitPath
+  let repoDir = takeDirectory hgitPath
+  oidStr <- getHeadCommitOid repoDir
   let headOid = if null oidStr then Nothing else Just oidStr
   case headOid of
     Nothing -> return "No commits found."
@@ -285,15 +234,26 @@ traverseCommits oid acc = do
         Nothing -> formatCommits newAcc
         Just parent -> traverseCommits parent newAcc
 
--- | Format the list of commits into a string
 formatCommits :: [Commit] -> IO String
 formatCommits commits = do
-  let formatted = intercalate "\n\n" $ map formatCommit (reverse commits)
-  return formatted
+  tz <- getCurrentTimeZone
+  let reversedCommits = reverse commits
+      formatted = case reversedCommits of
+        [] -> []
+        (latest:rest) ->
+          formatCommitWithTZ tz latest True :
+          map (formatCommitWithTZ tz `flip` False) rest
+  return $ intercalate "\n\n" formatted
 
--- | Format a single commit
-formatCommit :: Commit -> String
-formatCommit commit =
-  "commit " ++ treeOid commit ++ " (HEAD -> main)\n" ++
-  "Date:   " ++ timestamp commit ++ "\n\n" ++
-  "    " ++ message commit
+-- Change signature of formatCommitWithTZ to accept a Bool indicating whether to print HEAD
+formatCommitWithTZ :: TimeZone -> Commit -> Bool -> String
+formatCommitWithTZ tz commit isHead = 
+  let epochStr = timestamp commit
+      epochTime = read epochStr :: Int
+      utcTime = posixSecondsToUTCTime (fromIntegral epochTime)
+      localTime = utcToLocalTime tz utcTime
+      dateString = formatTime defaultTimeLocale "%a %b %e %T %Y %z" localTime
+      headIndicator = if isHead then " (HEAD -> main)" else ""
+  in "commit " ++ treeOid commit ++ headIndicator ++ "\n" ++
+     "Date:   " ++ dateString ++ "\n\n" ++
+     "    " ++ message commit
