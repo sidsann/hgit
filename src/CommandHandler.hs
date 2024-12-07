@@ -24,7 +24,7 @@ import Utils
     )
 import Branch ( listBranches, createBranch, deleteBranch )
 import System.FilePath ((</>), takeDirectory)
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, listDirectory)
 import qualified Data.ByteString.Char8 as BS8
 import Status
     ( getCurrentBranchName,
@@ -222,9 +222,10 @@ handleLogCommand = do
 handleSwitchCommand :: [String] -> IO String
 handleSwitchCommand [branchName] = do
   headsPath <- getHeadsPath
-  let branchRefPath = headsPath </> branchName
-  branchExists <- doesFileExist branchRefPath
-  unless branchExists $ throwIO $ CommandError $ "Branch '" ++ branchName ++ "' does not exist"
+  branchFiles <- listDirectory headsPath
+
+  unless (branchName `elem` branchFiles) $ 
+    throwIO $ CommandError $ "Branch '" ++ branchName ++ "' does not exist"
 
   changesExist <- uncommittedChangesExist
   when changesExist $
@@ -233,11 +234,11 @@ handleSwitchCommand [branchName] = do
   headPath <- getHEADFilePath
   writeFileFromByteString headPath (stringToByteString $ "refs/heads/" ++ branchName)
 
+  let branchRefPath = headsPath </> branchName
   commitOidBS <- readFileAsByteString branchRefPath
   let commitOid = BS8.unpack $ BS8.strip commitOidBS
 
   checkoutCommit commitOid
-
   return $ "Switched to branch '" ++ branchName ++ "'"
 handleSwitchCommand _ = error "Invalid usage. This should never happen due to validateSwitchCommand."
 
