@@ -1,6 +1,6 @@
 cabal-version:  2.2
 name:           hgit
-version:        0.1.0.0
+version:        0.8.0.0
 description:    Please see the README on GitHub at <https://github.com/sidsann/hgit#readme>
 homepage:       https://github.com/sidsann/hgit#readme
 bug-reports:    https://github.com/sidsann/hgit/issues
@@ -61,6 +61,8 @@ library
       ParserTests
       BranchTests
       LogTests
+      Status
+      StatusTests
       -- if you add modules to your project, list them here
       -- so that they will be available to the executable and test suite
   hs-source-dirs:

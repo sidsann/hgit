@@ -72,6 +72,12 @@ commands =
         description = "Displays commit logs...",
         flags = [],
         validate = defaultValidate
+      },
+          Command
+      { subcommand = "status",
+        description = "Show the working tree status.",
+        flags = [],
+        validate = defaultValidate
       }
   ]
 
@@ -94,6 +100,8 @@ commandHandler parsedCmd = do
     "branch" -> handleBranch flags args
     "log" -> handleLogCommand
     "switch" -> handleSwitchCommand args
+    "status" -> handleStatus
+
     _ -> throwIO $ userError $ "Unknown subcommand: " ++ cmdStr
 
   case result of
@@ -127,7 +135,7 @@ validateAddCommand flags args =
     ([], ["."]) -> Right ()
     ([], _ : _) -> Right ()
     _ -> Left $ CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"
-    
+
 validateCommitCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
 validateCommitCommand flags args =
   case (flags, args) of
@@ -224,3 +232,20 @@ handleSwitchCommand [branchName] = do
 
   return $ "Switched to branch '" ++ branchName ++ "'"
 handleSwitchCommand _ = error "Invalid usage. This should never happen due to validateSwitchCommand."
+
+handleStatus :: IO String
+handleStatus = do
+  branchName <- getCurrentBranchName
+
+  headTreeMap <- getHEADTreeMap
+
+  indexMap <- readIndexFile
+
+  workingFiles <- getAllFiles
+  workingMap <- buildWorkingDirectoryMap workingFiles
+
+  let changesToCommit = computeChangesToBeCommitted headTreeMap indexMap
+  let changesNotStaged = computeChangesNotStaged indexMap workingMap
+  let untrackedFiles = computeUntrackedFiles headTreeMap indexMap workingMap
+
+  return $ formatStatusOutput branchName changesToCommit changesNotStaged untrackedFiles
