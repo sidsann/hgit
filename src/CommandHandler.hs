@@ -1,17 +1,13 @@
 module CommandHandler (commandHandler, commands) where
 
 import CommandParser (Command (..), CommandError (..), Flag (..), FlagType (..), ParsedCommand (..), defaultValidate)
-import Commit
-    ( buildTree, createCommitContent, getCurrentCommitOid, updateHEAD, Commit (treeOid, timestamp, message), deserializeCommit, parentOid )
+import Commit (buildTree, createCommitContent, getCurrentCommitOid, updateHEAD, Commit, parentOid, traverseCommits, checkoutCommit, anyModifiedFile, uncommittedChangesExist)
 import Control.Exception (SomeException, throwIO, try)
 import Control.Monad (unless, when)
 import Data.Map.Strict qualified as Map
-import Data.Text qualified (pack)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Data.Time.LocalTime (getCurrentTimeZone, utcToLocalTime, TimeZone)
-import Index (readIndexFile, updateIndex, writeIndexFile)
+import Index (readIndexFile, updateIndex, writeIndexFile, getAllFiles)
 import Utils
     ( doesDirectoryExist,
       createObject,
@@ -23,24 +19,26 @@ import Utils
       getObjectsPath,
       getHeadPath,
       getHEADFilePath,
-      stringToByteString, getHeadCommitOid )
+      stringToByteString,
+      getHeadCommitOid, readFileAsByteString
+    )
 import Branch ( listBranches, createBranch, deleteBranch )
-import Data.List (intercalate)
-import System.FilePath (takeDirectory)
+import System.FilePath ((</>), takeDirectory)
+import System.Directory (doesFileExist)
+import qualified Data.ByteString.Char8 as BS8
 
 commands :: [Command]
 commands =
   [ Command
       { subcommand = "init",
         description =
-          "Creates the .hgit directory with necessary subdirectories and files, including an empty HEAD file, an empty objects directory, and refs/heads/ with an empty main file.",
+          "Creates the .hgit directory...",
         flags = [],
         validate = defaultValidate
       },
     Command
       { subcommand = "add",
-        description =
-          "Adds file(s) to the index. Supports adding individual files, updating tracked files, or adding all files in the current directory and subdirectories.",
+        description = "Adds file(s) to the index.",
         flags =
           [ Flag {longName = "update", shortName = Just "u", flagType = NoArg}
           ],
@@ -48,8 +46,7 @@ commands =
       },
     Command
       { subcommand = "commit",
-        description =
-          "Creates a new commit from the current index with a commit message. Supports committing with a message, amending the last commit, or using the previous commit message.",
+        description = "Creates a new commit from the current index...",
         flags =
           [Flag {longName = "message", shortName = Just "m", flagType = RequiresArg}],
         validate = validateCommitCommand
@@ -57,72 +54,51 @@ commands =
     Command
       { subcommand = "branch",
         description =
-          "List, create, or delete branches.\n\
-          \Usage:\n\
-          \  hgit branch                List all branches\n\
-          \  hgit branch <branchname>   Create a new branch\n\
-          \  hgit branch -d <branchname> Delete an existing branch",
+          "List, create, or delete branches...",
         flags =
           [ Flag { longName = "delete", shortName = Just "d", flagType = RequiresArg }
           ],
         validate = validateBranchCommand
       },
-      -- , Command
-      --     { subcommand = "switch",
-      --       description =
-      --         "Switches to an existing branch or creates and switches to a new branch.",
-      --       flags =
-      --         [ Flag { longName = "create", shortName = Just "c", flagType = Required }
-      --         ],
-      --       args = [ "branchname" ]
-      --     }
+    Command
+      { subcommand = "switch",
+        description =
+          "Switches to an existing branch. Usage: 'hgit switch <branchname>'",
+        flags = [],
+        validate = validateSwitchCommand
+      },
     Command
       { subcommand = "log",
-        description =
-          "Displays commit logs in reverse chronological order, showing commit hashes, timestamps, and commit messages.",
+        description = "Displays commit logs...",
         flags = [],
         validate = defaultValidate
       }
-      -- , Command
-      --     { subcommand = "status",
-      --       description =
-      --         "Shows the working tree status, including changes to be committed, changes not staged for commit, and untracked files.",
-      --       flags = [],
-      --       args = []
-      --     }
   ]
 
--- | Main command handler that dispatches commands
 commandHandler :: ParsedCommand -> IO (Either CommandError String)
 commandHandler parsedCmd = do
   let cmdStr = subcommand . parsedSubcommand $ parsedCmd
       flags = parsedFlags parsedCmd
       args = parsedArguments parsedCmd
 
-  -- Check if the repository exists for all commands except 'init'
   when (cmdStr /= "init") $ do
     repoExists <- doesDirectoryExist =<< getHgitPath
     unless repoExists $
       throwIO $
         userError ".hgit doesn't exist, call 'hgit init' first"
 
-  -- Dispatch the command with exception handling
   result <- try $ case cmdStr of
     "init" -> handleInit
     "add" -> handleAdd flags args
     "commit" -> handleCommit flags args
     "branch" -> handleBranch flags args
-    "log" -> handleLog
-
-
-    -- Add other command handlers here
+    "log" -> handleLogCommand
+    "switch" -> handleSwitchCommand args
     _ -> throwIO $ userError $ "Unknown subcommand: " ++ cmdStr
 
-  -- Convert exceptions to CommandError
   case result of
     Left (ex :: SomeException) -> return $ Left (CommandError $ show ex)
     Right output -> return $ Right output
-
 
 handleInit :: IO String
 handleInit = do
@@ -151,7 +127,7 @@ validateAddCommand flags args =
     ([], ["."]) -> Right ()
     ([], _ : _) -> Right ()
     _ -> Left $ CommandError "Invalid usage of 'hgit add'. Use 'hgit add -u', 'hgit add <file>... ', or 'hgit add .'"
-
+    
 validateCommitCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
 validateCommitCommand flags args =
   case (flags, args) of
@@ -161,13 +137,19 @@ validateCommitCommand flags args =
 validateBranchCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
 validateBranchCommand flags args =
   case flags of
-    [("delete", Just branchName)] -> Right () -- Deleting a branch
+    [("delete", Just _)] -> Right () -- Deleting a branch
     [] ->
       case args of
         [] -> Right () -- Listing branches
-        [branchName] -> Right () -- Creating a branch
-        _ -> Left $ CommandError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."
-    _ -> Left $ CommandError "Invalid flags for 'hgit branch'. Use '-d <branchname>' to delete a branch."
+        [_] -> Right () -- Creating a branch
+        _ -> Left $ CommandError "Invalid usage of 'hgit branch'."
+    _ -> Left $ CommandError "Invalid flags for 'hgit branch'."
+
+validateSwitchCommand :: [(String, Maybe String)] -> [String] -> Either CommandError ()
+validateSwitchCommand _ args =
+  case args of
+    [_] -> Right ()
+    _ -> Left $ CommandError "Invalid usage of 'hgit switch'."
 
 handleAdd :: [(String, Maybe String)] -> [String] -> IO String
 handleAdd flags args = do
@@ -180,7 +162,7 @@ handleAdd flags args = do
       return ""
 
 handleCommit :: [(String, Maybe String)] -> [String] -> IO String
-handleCommit flags args = do
+handleCommit flags _args = do
   let Just (Just commitMsg) = lookup "message" flags
   indexMap <- readIndexFile
   when (Map.null indexMap) $
@@ -208,12 +190,11 @@ handleBranch flags args = do
         [branchName] -> do
           createBranch branchName
           return $ "Branch '" ++ branchName ++ "' created."
-        _ -> throwIO $ userError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."
-    _ -> throwIO $ userError "Invalid usage of 'hgit branch'. Use 'hgit branch', 'hgit branch <branchname>', or 'hgit branch -d <branchname>'."
+        _ -> throwIO $ userError "Invalid usage of 'hgit branch'."
+    _ -> throwIO $ userError "Invalid usage of 'hgit branch'."
 
--- | Handle the 'log' command
-handleLog :: IO String
-handleLog = do
+handleLogCommand :: IO String
+handleLogCommand = do
   hgitPath <- getHgitPath
   let repoDir = takeDirectory hgitPath
   oidStr <- getHeadCommitOid repoDir
@@ -222,38 +203,24 @@ handleLog = do
     Nothing -> return "No commits found."
     Just oid -> traverseCommits oid []
 
--- | Traverse commits starting from the given OID
-traverseCommits :: String -> [Commit] -> IO String
-traverseCommits oid acc = do
-  commitResult <- deserializeCommit oid
-  case commitResult of
-    Left err -> return $ "Error reading commit " ++ oid ++ ": " ++ err
-    Right commit -> do
-      let newAcc = acc ++ [commit]
-      case parentOid commit of
-        Nothing -> formatCommits newAcc
-        Just parent -> traverseCommits parent newAcc
+handleSwitchCommand :: [String] -> IO String
+handleSwitchCommand [branchName] = do
+  headsPath <- getHeadsPath
+  let branchRefPath = headsPath </> branchName
+  branchExists <- doesFileExist branchRefPath
+  unless branchExists $ throwIO $ CommandError $ "Branch '" ++ branchName ++ "' does not exist."
 
-formatCommits :: [Commit] -> IO String
-formatCommits commits = do
-  tz <- getCurrentTimeZone
-  let reversedCommits = reverse commits
-      formatted = case reversedCommits of
-        [] -> []
-        (latest:rest) ->
-          formatCommitWithTZ tz latest True :
-          map (formatCommitWithTZ tz `flip` False) rest
-  return $ intercalate "\n\n" formatted
+  changesExist <- uncommittedChangesExist
+  when changesExist $
+    throwIO $ CommandError "You have uncommitted changes. Please commit or discard them before switching branches."
 
--- Change signature of formatCommitWithTZ to accept a Bool indicating whether to print HEAD
-formatCommitWithTZ :: TimeZone -> Commit -> Bool -> String
-formatCommitWithTZ tz commit isHead = 
-  let epochStr = timestamp commit
-      epochTime = read epochStr :: Int
-      utcTime = posixSecondsToUTCTime (fromIntegral epochTime)
-      localTime = utcToLocalTime tz utcTime
-      dateString = formatTime defaultTimeLocale "%a %b %e %T %Y %z" localTime
-      headIndicator = if isHead then " (HEAD -> main)" else ""
-  in "commit " ++ treeOid commit ++ headIndicator ++ "\n" ++
-     "Date:   " ++ dateString ++ "\n\n" ++
-     "    " ++ message commit
+  headPath <- getHEADFilePath
+  writeFileFromByteString headPath (stringToByteString $ "refs/heads/" ++ branchName)
+
+  commitOidBS <- readFileAsByteString branchRefPath
+  let commitOid = BS8.unpack $ BS8.strip commitOidBS
+
+  checkoutCommit commitOid
+
+  return $ "Switched to branch '" ++ branchName ++ "'"
+handleSwitchCommand _ = error "Invalid usage. This should never happen due to validateSwitchCommand."

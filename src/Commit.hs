@@ -4,15 +4,15 @@
 module Commit where
 
 import CommandParser (CommandError (..))
-import Control.Monad (forM_, unless, when)
+import Control.Monad (forM_, unless, when, forM)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
-import Data.List (isPrefixOf, sort)
+import Data.List (isPrefixOf, sort, intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
-import Index (readIndexFile)
-import System.Directory (doesFileExist)
+import Index (readIndexFile, writeIndexFile, getAllFiles)
+import System.Directory (doesFileExist, removeFile)
 import System.FilePath
   ( splitDirectories,
     takeDirectory,
@@ -24,8 +24,12 @@ import Utils
     getHEADFilePath,
     getHgitPath,
     readAndDecompressObject,
-    stringToByteString,
+    stringToByteString, createDirectoryIfMissing', sha1Hash,
   )
+import Data.Time.LocalTime (TimeZone, utcToLocalTime, getCurrentTimeZone)
+import Control.Exception (throwIO)
+import Data.Time.Format (formatTime, defaultTimeLocale)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 
 -- | Data structure representing a Commit
 data Commit = Commit
@@ -196,3 +200,110 @@ updateHEAD commitOid = do
   let refPath = BS8.unpack ref -- e.g., "refs/heads/main"
   refFullPath <- fmap (</> refPath) getHgitPath
   BS.writeFile refFullPath (stringToByteString commitOid)
+
+-- | Traverse commits starting from the given OID
+traverseCommits :: String -> [Commit] -> IO String
+traverseCommits oid acc = do
+  commitResult <- deserializeCommit oid
+  case commitResult of
+    Left err -> return $ "Error reading commit " ++ oid ++ ": " ++ err
+    Right commit -> do
+      let newAcc = acc ++ [commit]
+      case parentOid commit of
+        Nothing -> formatCommits newAcc
+        Just parent -> traverseCommits parent newAcc
+
+formatCommits :: [Commit] -> IO String
+formatCommits commits = do
+  tz <- getCurrentTimeZone
+  let reversedCommits = reverse commits
+      formatted = case reversedCommits of
+        [] -> []
+        (latest:rest) ->
+          formatCommitWithTZ tz latest True :
+          map (formatCommitWithTZ tz `flip` False) rest
+  return $ intercalate "\n\n" formatted
+
+formatCommitWithTZ :: TimeZone -> Commit -> Bool -> String
+formatCommitWithTZ tz commit isHead =
+  let epochStr = timestamp commit
+      epochTime = read epochStr :: Int
+      utcTime = posixSecondsToUTCTime (fromIntegral epochTime)
+      localTime = utcToLocalTime tz utcTime
+      dateString = formatTime defaultTimeLocale "%a %b %e %T %Y %z" localTime
+      headIndicator = if isHead then " (HEAD -> main)" else ""
+  in "commit " ++ treeOid commit ++ headIndicator ++ "\n" ++
+     "Date:   " ++ dateString ++ "\n\n" ++
+     "    " ++ message commit
+
+checkoutTree :: Tree -> FilePath -> IO (Map FilePath String)
+checkoutTree (Tree entries) dir = do
+  indexMaps <- forM entries $ \(typ, oid, name) -> do
+    let path = if dir == "." then name else dir </> name
+    case typ of
+      "blob" -> do
+        contentResult <- readAndDecompressObject oid
+        case contentResult of
+          Left err -> throwIO $ CommandError $ "Failed to read blob object: " ++ err
+          Right content -> do
+            createDirectoryIfMissing' (takeDirectory path)
+            BS.writeFile path content
+            return $ Map.singleton path oid
+      "tree" -> do
+        treeResult <- deserializeTree oid
+        case treeResult of
+          Left err -> throwIO $ userError $ "Failed to deserialize subtree: " ++ err
+          Right subtree -> checkoutTree subtree path
+      _ -> throwIO $ userError $ "Unknown object type in tree: " ++ typ
+  return (Map.unions indexMaps)
+
+anyModifiedFile :: Map FilePath String -> IO Bool
+anyModifiedFile indexMap = do
+  or <$> mapM fileChanged (Map.toList indexMap)
+  where
+    fileChanged (path, oid) = do
+      exists <- doesFileExist path
+      if not exists
+        then return True -- file deleted => change
+        else do
+          content <- BS.readFile path
+          let currentOid = sha1Hash content
+          return (currentOid /= oid)
+
+checkoutCommit :: String -> IO ()
+checkoutCommit commitOid = do
+  commitResult <- deserializeCommit commitOid
+  case commitResult of
+    Left err -> throwIO $ userError $ "Failed to deserialize commit: " ++ err
+    Right commit -> do
+      treeResult <- deserializeTree (treeOid commit)
+      case treeResult of
+        Left err -> throwIO $ userError $ "Failed to deserialize tree: " ++ err
+        Right tree -> do
+          clearWorkingDirectory
+          indexMap <- checkoutTree tree "."
+          writeIndexFile indexMap
+
+clearWorkingDirectory :: IO ()
+clearWorkingDirectory = do
+  allFiles <- getAllFiles
+  forM_ allFiles $ \f -> do
+    -- Only skip removing if path starts with ".hgit"
+    unless (".hgit" `isPrefixOf` f) $ removeFileIfExists f
+  where
+    removeFileIfExists fp = do
+      e <- doesFileExist fp
+      when e (removeFile fp)
+
+uncommittedChangesExist :: IO Bool
+uncommittedChangesExist = do
+  indexMap <- readIndexFile
+  allFiles <- getAllFiles
+
+  let trackedFiles = Map.keys indexMap
+      untracked = filter (`notElem` trackedFiles) allFiles
+
+  if not (null untracked)
+    then return True
+    else do
+      anyModifiedFile indexMap
