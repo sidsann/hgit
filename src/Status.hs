@@ -14,7 +14,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Maybe (mapMaybe)
-import System.FilePath (takeFileName)
+import System.FilePath (takeFileName, (</>))
 import Control.Monad (forM)
 import Utils (getHEADFilePath, sha1Hash)
 import Commit (deserializeCommit, deserializeTree, getCurrentCommitOid, Commit(..), Tree(..))
@@ -40,7 +40,23 @@ getHEADTreeMap = do
           treeResult <- deserializeTree (treeOid commit)
           case treeResult of
             Left _err -> return Map.empty
-            Right (Tree entries) -> return $ Map.fromList [(fp, oid) | (typ, oid, fp) <- entries, typ == "blob"]
+            Right tree -> collectBlobsFromTree "." tree
+
+-- Recursively collect all blobs from the tree and its subtrees
+collectBlobsFromTree :: FilePath -> Tree -> IO (Map FilePath String)
+collectBlobsFromTree basePath (Tree entries) = do
+  fmap Map.unions $ forM entries $ \(typ, oid, name) -> case typ of
+    "blob" ->
+      -- Add this blob to the map
+      return $ Map.singleton (if basePath == "." then name else basePath </> name) oid
+    "tree" -> do
+      -- Recursively fetch blobs from the subtree
+      subtreeResult <- deserializeTree oid
+      case subtreeResult of
+        Left _ -> return Map.empty
+        Right subtree ->
+          collectBlobsFromTree (if basePath == "." then name else basePath </> name) subtree
+    _ -> return Map.empty
 
 buildWorkingDirectoryMap :: [FilePath] -> IO (Map FilePath String)
 buildWorkingDirectoryMap files = do

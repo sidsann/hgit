@@ -54,8 +54,8 @@ testParseCommand =
         ~: parseCommand letCommands ["init"]
         ~?= Right (head letCommands, []),
       "Invalid Command"
-        ~: parseCommand letCommands ["status"]
-        ~?= Left (CommandError "Unknown command: status")
+        ~: parseCommand letCommands ["rebase"]
+        ~?= Left (CommandError "Unknown command: rebase")
     ]
 
 testParseFlagsAndArgs :: Test

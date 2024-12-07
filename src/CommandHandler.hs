@@ -26,6 +26,14 @@ import Branch ( listBranches, createBranch, deleteBranch )
 import System.FilePath ((</>), takeDirectory)
 import System.Directory (doesFileExist)
 import qualified Data.ByteString.Char8 as BS8
+import Status
+    ( getCurrentBranchName,
+      getHEADTreeMap,
+      buildWorkingDirectoryMap,
+      computeChangesToBeCommitted,
+      computeChangesNotStaged,
+      computeUntrackedFiles,
+      formatStatusOutput )
 
 commands :: [Command]
 commands =
@@ -216,7 +224,7 @@ handleSwitchCommand [branchName] = do
   headsPath <- getHeadsPath
   let branchRefPath = headsPath </> branchName
   branchExists <- doesFileExist branchRefPath
-  unless branchExists $ throwIO $ CommandError $ "Branch '" ++ branchName ++ "' does not exist."
+  unless branchExists $ throwIO $ CommandError $ "Branch '" ++ branchName ++ "' does not exist"
 
   changesExist <- uncommittedChangesExist
   when changesExist $

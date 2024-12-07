@@ -8,6 +8,8 @@ import Test.HUnit ( runTestTT, Test(TestList) )
 import Test.QuickCheck
     ( quickCheckWith, stdArgs, Testable, Args(maxSuccess) )
 import BranchTests (branchTests)
+import StatusTests (statusTests)
+import SwitchTests (switchTests)
 
 main :: IO ()
 main = do
@@ -21,7 +23,9 @@ main = do
           addTests,
           commitTests,
           branchTests,
-          logTests
+          logTests,
+          switchTests,
+          statusTests
         ]
 
   -- Run QuickCheck Properties

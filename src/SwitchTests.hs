@@ -23,7 +23,7 @@ import Control.Monad (when)
 import Index (readIndexFile, getAllFiles)
 import CommandParser (Command (..), CommandError(..))
 import Data.Map.Strict qualified as Map
-import Data.List (sort)
+import Data.List (sort, isInfixOf)
 import Utils (getHgitPath, stringToByteString, writeFileFromByteString, readFileAsByteString)
 
 runSwitchCommand :: [String] -> IO (Either CommandError String)
@@ -45,7 +45,7 @@ testSwitchNonExistentBranch = TestCase $ withTestRepo $ \testDir -> do
   result <- runSwitchCommand ["no-such-branch"]
   case result of
     Left (CommandError msg) -> do
-      assertBool "Error message should mention branch not existing" ("does not exist" `elem` words msg)
+      assertBool "Error message should mention branch not existing" ("does not exist" `isInfixOf` msg)
     Right _ -> assertFailure "Expected failure when switching to non-existent branch."
 
   newIndex <- readIndexFile
