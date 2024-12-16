@@ -99,7 +99,7 @@ commandHandler parsedCmd = do
     repoExists <- doesDirectoryExist =<< getHgitPath
     unless repoExists $
       throwIO $
-        userError ".hgit doesn't exist, call 'hgit init' first"
+        CommandError ".hgit doesn't exist, call 'hgit init' first"
 
   result <- try $ case cmdStr of
     "init" -> handleInit
@@ -110,7 +110,7 @@ commandHandler parsedCmd = do
     "switch" -> handleSwitchCommand args
     "status" -> handleStatus
 
-    _ -> throwIO $ userError $ "Unknown subcommand: " ++ cmdStr
+    _ -> throwIO $ CommandError $ "Unknown subcommand: " ++ cmdStr
 
   case result of
     Left (ex :: SomeException) -> return $ Left (CommandError $ show ex)
@@ -172,7 +172,7 @@ handleAdd flags args = do
   indexMap <- readIndexFile
   updatedIndexMapResult <- updateIndex indexMap args flags
   case updatedIndexMapResult of
-    Left err -> throwIO $ userError $ show err
+    Left err -> throwIO $ CommandError $ show err
     Right updatedIndexMap -> do
       writeIndexFile updatedIndexMap
       return ""
@@ -206,8 +206,8 @@ handleBranch flags args = do
         [branchName] -> do
           createBranch branchName
           return $ "Branch '" ++ branchName ++ "' created."
-        _ -> throwIO $ userError "Invalid usage of 'hgit branch'."
-    _ -> throwIO $ userError "Invalid usage of 'hgit branch'."
+        _ -> throwIO $ CommandError "Invalid usage of 'hgit branch'."
+    _ -> throwIO $ CommandError "Invalid usage of 'hgit branch'."
 
 handleLogCommand :: IO String
 handleLogCommand = do

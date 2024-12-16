@@ -252,9 +252,9 @@ checkoutTree (Tree entries) dir = do
       "tree" -> do
         treeResult <- deserializeTree oid
         case treeResult of
-          Left err -> throwIO $ userError $ "Failed to deserialize subtree: " ++ err
+          Left err -> throwIO $ CommandError $ "Failed to deserialize subtree: " ++ err
           Right subtree -> checkoutTree subtree path
-      _ -> throwIO $ userError $ "Unknown object type in tree: " ++ typ
+      _ -> throwIO $ CommandError $ "Unknown object type in tree: " ++ typ
   return (Map.unions indexMaps)
 
 anyModifiedFile :: Map FilePath String -> IO Bool
@@ -274,11 +274,11 @@ checkoutCommit :: String -> IO ()
 checkoutCommit commitOid = do
   commitResult <- deserializeCommit commitOid
   case commitResult of
-    Left err -> throwIO $ userError $ "Failed to deserialize commit: " ++ err
+    Left err -> throwIO $ CommandError $ "Failed to deserialize commit: " ++ err
     Right commit -> do
       treeResult <- deserializeTree (treeOid commit)
       case treeResult of
-        Left err -> throwIO $ userError $ "Failed to deserialize tree: " ++ err
+        Left err -> throwIO $ CommandError $ "Failed to deserialize tree: " ++ err
         Right tree -> do
           clearWorkingDirectory
           indexMap <- checkoutTree tree "."
